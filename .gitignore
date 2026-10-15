@@ -7,3 +7,6 @@
 /.pio/
 /.vscode/
 /spa-env/
+
+# host tests
+tests/test_protocol

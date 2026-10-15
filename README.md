@@ -1,14 +1,8 @@
 # PicoW-Intex-PureSpa
-Intex PureSpa SBH20 control interface for esphome.
+Intex PureSpa SB-H20 control interface for esphome.
 
 Idea came from https://github.com/YorffoeG/diyscip and https://github.com/jnsbyr/esp8266-intexsbh20 for their great comprehension of PureSpa protocol.
 Since many reports problems with controlling target temperature due to heavy processing in interrupts, I decide to give raspberry pi pico W a try.
-
-That's my very project first with :
-- Raspberry Pi Pico W
-- esphome
-
-So please be indulgent, I've learnt a lot, but it's just a beginning.
 
 # Aspirin tube case !!
 ![image](https://github.com/RealByron/PicoW-Intex-PureSpa/assets/1749192/8ec6f361-ab9b-407b-b083-84245200abdd)
@@ -51,8 +45,22 @@ For push button, a function put expected push button code in FIFO and the PIO pr
 
 When X and Y are equal, a pulse is done on DATA line (4µs after CS rising edge and during 2 µs)
 
-# Installation 
+# Firmware structure
 
+The protocol logic is hardware-independent and covered by host tests:
+
+- `components/purespa/protocol.{h,cpp}` - frame decoding and button/setpoint decisions, no Pico SDK or ESPHome code, all timing is passed in as a parameter
+- `components/purespa/pio_bus.{h,cpp}` - the PIO program and an IRQ handler that only copies frames into a ring buffer; decoding and logging happen in the main loop
+- `components/purespa/purespa*.{h,cpp}` - ESPHome entities on top of the two layers above
+- `tests/` - host tests with a fake spa model, run with `make -C tests`
+
+Run the tests (clang++ or g++, no dependencies):
+
+```
+make -C tests
+```
+
+# Installation 
 I'm using WSL Ubuntu on windows 11.
 Go to your favourite dev directory then `git clone` this repository
 
@@ -84,4 +92,3 @@ This project is licensed under the MIT License.
 
 # Disclaimer
 Using this project to control your Intex PureSpa may void your warranty. Please consult the documentation and terms of service provided by Intex before using this project.
-

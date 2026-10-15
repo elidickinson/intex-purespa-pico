@@ -2,7 +2,7 @@ esphome:
   name: spa
   friendly_name: Spa
 
-rp2040:
+rp2:
   board: rpipicow
 
 # Enable logging
@@ -10,13 +10,10 @@ logger:
   level: INFO
 
 # Enable Home Assistant API
+# ESPHome API/OTA secrets - generate your own, e.g. "esphome config spa.yaml" prints errors until they are set
 api:
   encryption:
-    key: "UvL5ol83NZ6/Ek0/e6jtmrlNGhOTGOGenoN7O508Bjw="
-
-ota:
-  - platform: esphome
-    password: "8596289a4988fba7e1e62f0f48441277"
+    key: "REPLACE_WITH_GENERATED_BASE64_KEY"
 
 wifi:
   ssid: !secret wifi_ssid
@@ -25,7 +22,7 @@ wifi:
   # Enable fallback hotspot in case wifi connection fails
   ap:
     ssid: "Spa Fallback Hotspot"
-    password: "ys3Za1z3eOIR"
+    password: "REPLACE_ME_123"
 
 
 external_components:
