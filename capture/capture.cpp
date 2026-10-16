@@ -75,6 +75,9 @@ static void __not_in_flash_func(irq_handler)() {
     }
     ring[h].t = time_us_32();
     ring[h].frame = ~raw & 0xFFFF;
+    // GOTCHA: raw 0 (DATA stuck low: floating pin, wrong pin, unpowered
+    // shifter) is exactly the miswiring clue, so it is counted and logged,
+    // never silently dropped.
     if (raw == 0)
       zero_frames++;
     head = next;
@@ -99,6 +102,9 @@ static char pkt[1200];
 static size_t pkt_len = 0;
 
 static void send(const char *data, size_t len) {
+  // GOTCHA: with a USB host connected but not reading, Serial.write blocks for up
+  // to 1 s per call (arduino-pico SerialUSB), which overflows the ring. Prefer
+  // the UDP path; USB is for a bench setup only.
   Serial.write(data, len);
   if (wifi_ok && pkt_len + len <= sizeof(pkt)) {
     memcpy(pkt + pkt_len, data, len);
@@ -107,6 +113,9 @@ static void send(const char *data, size_t len) {
 }
 
 static void flush_udp(uint32_t now) {
+  // Frames are batched into ~1 KB packets flushed every 200 ms (~5 packets/s).
+  // One packet per frame would be ~1500 packets/s of broadcast airtime, which
+  // the AP re-sends at basic rate and the radio cannot sustain.
   if (!wifi_ok || pkt_len == 0)
     return;
   udp.beginPacket(LOG_HOST, LOG_PORT);
@@ -145,7 +154,8 @@ void setup() {
   sm_config_set_in_shift(&c, false, false, 16);
   sm_config_set_out_shift(&c, true, false, 16);
   // No sm_config_set_set_pins(): the default set-pin count is 0, so the
-  // program's `set pindirs, 1` can never switch DATA to output.
+  // program's `set pindirs, 1` can never switch DATA to output. This is the
+  // strongest passivity guarantee here; keep it if the program is updated.
 
   pio_gpio_init(pio, DATA_PIN);
   pio_gpio_init(pio, CLK_PIN);
@@ -153,6 +163,9 @@ void setup() {
   pio_sm_set_consecutive_pindirs(pio, sm, DATA_PIN, 3, false);
 
   // RX-only: the FIFO join is safe here because nothing ever writes TX.
+  // GOTCHA (from the production component): joining RX disables TX, whose
+  // status then reads permanently full - any pio_sm_put_blocking() would hang
+  // forever. If this sketch ever needs TX, remove the join first.
   sm_config_set_fifo_join(&c, PIO_FIFO_JOIN_RX);
   pio_sm_clear_fifos(pio, sm);
   pio_set_irq0_source_enabled(pio, pis_interrupt0, true);
@@ -162,6 +175,8 @@ void setup() {
   pio_sm_init(pio, sm, offset, &c);
   // Arm X while the SM is halted: X = ~null = 0xFFFFFFFF, which no 16-bit
   // frame equals, so the reply block never runs and DATA stays an input.
+  // GOTCHA: X's reset value is 0 and a raw 0 (DATA low all 16 clocks, e.g.
+  // miswired or floating DATA) would match it; SM restart does NOT clear X.
   pio_sm_exec(pio, sm, pio_encode_mov_not(pio_x, pio_null));
   pio_sm_set_enabled(pio, sm, true);
 
@@ -172,6 +187,10 @@ void setup() {
 }
 
 void loop() {
+  // wifi_up() is polled every loop, not only when frames arrive: with no bus
+  // traffic (miswired pins, no latch) frames never drain and the UDP status
+  // line would otherwise never start flowing - "miswired" would look like
+  // "WiFi down".
   uint32_t now = millis();
   wifi_up(now);
 
