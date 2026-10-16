@@ -24,7 +24,7 @@ static std::atomic<uint32_t> head{0};  // written by the IRQ handler only
 static std::atomic<uint32_t> tail{0};  // written by read() only
 static std::atomic<uint32_t> dropped_frames{0};
 
-static void irq_handler() {
+static void __not_in_flash_func(irq_handler)() {
   while (!pio_sm_is_rx_fifo_empty(pio, sm)) {
     uint32_t raw = pio_sm_get(pio, sm);
     if (raw == 0)
@@ -37,6 +37,12 @@ static void irq_handler() {
     }
     ring[h] = ~raw & 0xFFFF;
     head.store(next, std::memory_order_release);
+  }
+  // RXSTALL is write-one-to-clear and covers all pushes blocked since the last clear
+  uint32_t rxstall = 1u << (PIO_FDEBUG_RXSTALL_LSB + sm);
+  if (pio->fdebug & rxstall) {
+    pio->fdebug = rxstall;
+    dropped_frames.fetch_add(1, std::memory_order_relaxed);
   }
   pio_interrupt_clear(pio, 0);
 }

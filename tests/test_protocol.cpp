@@ -28,23 +28,26 @@ static void show(Decoder &decoder, const char *text, int n) {
   }
 }
 
-// Minimal model of the spa mainboard: emits display and LED frames and reacts to held buttons.
-// UP/DOWN first shows the target blinking for 5 s; further presses change it and holding repeats.
+// Minimal spa model: sanitizer presses cycle off -> 3 -> 5 -> 8 -> off and blink the H display
+// for 5 s; UP/DOWN first shows the target blinking for 5 s, then changes it and repeats while held.
 struct FakeSpa {
   bool power = true;
   bool responsive = true;
   bool filter = false;
+  bool sanitizer_on = false;
+  uint8_t sanitizer_hours = 0;
   int water = 38;
   int target = 37;
   uint32_t blink_period = 500;
-  std::vector<Button> presses;
+  std::vector<uint16_t> presses;
 
-  std::optional<Button> held;
+  std::optional<uint16_t> held;
   uint32_t held_at = 0, repeated_at = 0;
   uint32_t setting_at = 0, setting_until = 0;
+  uint32_t sanitizer_setting_at = 0, sanitizer_setting_until = 0;
 
-  void buttons(std::optional<Button> button, uint32_t now) {
-    bool temp_held = held == Button::UP || held == Button::DOWN;
+  void buttons(std::optional<uint16_t> button, uint32_t now) {
+    bool temp_held = held == static_cast<uint16_t>(Button::UP) || held == static_cast<uint16_t>(Button::DOWN);
     if (button != held) {
       held = button;
       held_at = repeated_at = now;
@@ -56,17 +59,32 @@ struct FakeSpa {
     }
   }
 
-  void press(Button button, uint32_t now) {
+  void press(uint16_t button, uint32_t now) {
     presses.push_back(button);
     if (!responsive)
       return;
-    if (button == Button::POWER) {
+    if (button == static_cast<uint16_t>(Button::POWER)) {
       power = !power;
-    } else if (power && button == Button::FILTER) {
+    } else if (power && button == static_cast<uint16_t>(Button::FILTER)) {
       filter = !filter;
-    } else if (power && (button == Button::UP || button == Button::DOWN)) {
+    } else if (power && button == static_cast<uint16_t>(Button::SANITIZER)) {
+      if (!sanitizer_on) {
+        sanitizer_on = true;
+        sanitizer_hours = 3;
+      } else if (sanitizer_hours == 3) {
+        sanitizer_hours = 5;
+      } else if (sanitizer_hours == 5) {
+        sanitizer_hours = 8;
+      } else {
+        sanitizer_on = false;
+        sanitizer_hours = 0;
+      }
+      sanitizer_setting_at = now;
+      sanitizer_setting_until = now + 5000;
+    } else if (power && (button == static_cast<uint16_t>(Button::UP) ||
+                         button == static_cast<uint16_t>(Button::DOWN))) {
       if (now < setting_until)
-        target = std::clamp(target + (button == Button::UP ? 1 : -1), 20, 40);
+        target = std::clamp(target + (button == static_cast<uint16_t>(Button::UP) ? 1 : -1), 20, 40);
       else
         setting_at = now;
       setting_until = now + 5000;
@@ -75,8 +93,14 @@ struct FakeSpa {
 
   std::string display(uint32_t now) const {
     char text[5];
-    if (!power || (now < setting_until && ((now - setting_at) / blink_period) % 2))
+    if (!power || (now < setting_until && ((now - setting_at) / blink_period) % 2) ||
+        (sanitizer_on && now < sanitizer_setting_until &&
+         ((now - sanitizer_setting_at) / blink_period) % 2))
       return "    ";
+    if (sanitizer_on) {
+      std::snprintf(text, sizeof text, "%03uH", sanitizer_hours);
+      return text;
+    }
     std::snprintf(text, sizeof text, "%03dC", now < setting_until ? target : water);
     return text;
   }
@@ -84,7 +108,8 @@ struct FakeSpa {
   // Frames of one 21 ms cycle, without cue and button frames
   std::vector<uint16_t> frames(uint32_t now) const {
     std::string text = display(now);
-    uint16_t leds = led::FRAME | (power ? led::POWER : 0) | (filter ? led::FILTER : 0);
+    uint16_t leds = led::FRAME | (power ? led::POWER : 0) | (filter ? led::FILTER : 0) |
+                    (sanitizer_on ? led::SANITIZER : 0);
     std::vector<uint16_t> out;
     for (int i = 0; i < 5; i++) {
       for (int pos = 0; pos < 4; pos++)
@@ -138,10 +163,17 @@ static void test_error_is_reported_and_cleared() {
   CHECK_EQ(d.status().current_temperature, 38);
 }
 
-static void test_sanitizer_hours_are_not_a_temperature() {
+static void test_sanitizer_hours_are_decoded_and_not_temperature_or_error() {
   Decoder d;
-  show(d, "003H", 150);
+  show(d, "005H", 150);
+  CHECK_EQ(d.status().sanitizer_hours, 5);
   CHECK_EQ(d.status().current_temperature, 0);
+  CHECK_EQ(d.status().error[0], 0);
+  show(d, "E91 ", 150);
+  CHECK(d.status().error == (std::array<char, 4>{'E', '9', '1', 0}));
+  show(d, "005H", 150);
+  CHECK_EQ(d.status().current_temperature, 0);
+  CHECK(d.status().error == (std::array<char, 4>{'E', '9', '1', 0}));
 }
 
 static void test_out_of_order_digit_frames_are_ignored() {
@@ -198,7 +230,7 @@ static void test_target_is_probed_once_and_water_temp_not_mistaken_for_it() {
   CHECK_EQ(r.decoder.status().target_temperature, 37);
   // One DOWN probe at boot (possibly retried once), no target changes
   CHECK(r.spa.presses.size() <= 2);
-  CHECK(r.spa.presses[0] == Button::DOWN);
+  CHECK(r.spa.presses[0] == static_cast<uint16_t>(Button::DOWN));
   r.run(20000);
   CHECK_EQ(r.decoder.status().target_temperature, 37);
   CHECK(r.spa.presses.size() <= 2);
@@ -278,6 +310,105 @@ static void test_slow_blink_does_not_confuse_controller() {
   CHECK(r.decoder.status().current_temperature <= 40);  // water temp, not the target
 }
 
+static void test_single_sanitizer_press_turns_on_led_state() {
+  Rig r;
+  r.spa.presses.clear();
+  r.controller.press(Button::SANITIZER);
+  r.run(2000);
+  CHECK(r.decoder.status().leds & led::SANITIZER);
+  CHECK_EQ(r.decoder.status().sanitizer_hours, 3);
+  CHECK_EQ(r.spa.presses.size(), 1);
+}
+
+static void test_sanitizer_hours_converge_without_overshoot() {
+  Rig r;
+  r.spa.presses.clear();
+  CHECK(r.controller.set_sanitizer_hours(5, r.now));
+  r.run(10000);
+  CHECK(r.spa.sanitizer_on);
+  CHECK_EQ(r.spa.sanitizer_hours, 5);
+  CHECK_EQ(r.decoder.status().sanitizer_hours, 5);
+  CHECK_EQ(r.spa.presses.size(), 2);
+  CHECK(!r.controller.held());
+  CHECK(!r.controller.adjusting_sanitizer());
+}
+
+static void test_setting_current_sanitizer_hours_issues_no_presses() {
+  Rig r;
+  r.spa.sanitizer_on = true;
+  r.spa.sanitizer_hours = 5;
+  r.run(2000);
+  r.spa.presses.clear();
+  CHECK(r.controller.set_sanitizer_hours(5, r.now));
+  r.run(100);
+  CHECK_EQ(r.spa.presses.size(), 0);
+  CHECK(!r.controller.adjusting_sanitizer());
+}
+
+static void test_sanitizer_turns_off_after_cycle() {
+  Rig r;
+  r.spa.sanitizer_on = true;
+  r.spa.sanitizer_hours = 3;
+  r.run(2000);
+  r.spa.presses.clear();
+  CHECK(r.controller.set_sanitizer_hours(0, r.now));
+  r.run(10000);
+  CHECK(!r.spa.sanitizer_on);
+  CHECK(!(r.decoder.status().leds & led::SANITIZER));
+  CHECK_EQ(r.spa.presses.size(), 3);
+  CHECK(!r.controller.held());
+}
+
+static void test_unresponsive_sanitizer_times_out_and_releases() {
+  Rig r;
+  r.spa.responsive = false;
+  r.spa.presses.clear();
+  CHECK(r.controller.set_sanitizer_hours(5, r.now));
+  r.run(Controller::SANITIZER_TIMEOUT_MS + 500);
+  CHECK(!r.controller.adjusting_sanitizer());
+  CHECK(!r.controller.held());
+  CHECK(std::count(r.spa.presses.begin(), r.spa.presses.end(),
+                   (uint16_t) Button::SANITIZER) >= 2);  // sanitizer presses, not the boot probe
+}
+
+static void test_sanitizer_aborts_after_unseen_presses() {
+  // A wrong sanitizer button code or LED mask makes every press look swallowed; the flow must
+  // abort after MAX_UNSEEN_PRESSES instead of cycling the real spa around the whole ring.
+  Rig r;
+  r.spa.presses.clear();
+  r.spa.responsive = false;
+  CHECK(r.controller.set_sanitizer_hours(5, r.now));
+  r.run(Controller::SANITIZER_TIMEOUT_MS + 500);
+  CHECK(std::count(r.spa.presses.begin(), r.spa.presses.end(), (uint16_t) Button::SANITIZER) <=
+        (int) Controller::MAX_UNSEEN_PRESSES);
+}
+
+static void test_sanitizer_on_at_unknown_hours_still_reaches_goal() {
+  // Sanitizer is already on but the display has not revealed the hours; setting 5 must not
+  // get stuck: after the bounded wait it presses through the cycle and lands on 5h.
+  Rig r;
+  r.spa.presses.clear();
+  r.spa.sanitizer_on = true;   // on, hours unknown to the decoder (display steady water)
+  r.spa.sanitizer_hours = 3;
+  r.spa.presses.clear();
+  CHECK(r.controller.set_sanitizer_hours(5, r.now));
+  r.run(15000);
+  CHECK_EQ(r.spa.sanitizer_hours, 5);
+  CHECK(r.spa.sanitizer_on);
+  CHECK(!r.controller.adjusting_sanitizer());
+}
+
+static void test_sanitizer_request_is_rejected_during_temperature_adjustment() {
+  Rig r;
+  CHECK(r.controller.set_target(40, r.now));
+  CHECK(!r.controller.set_sanitizer_hours(5, r.now));
+  r.run(30000);
+  CHECK_EQ(r.spa.sanitizer_on, false);
+  CHECK(!r.spa.presses.empty());
+  CHECK(std::find(r.spa.presses.begin(), r.spa.presses.end(), static_cast<uint16_t>(Button::SANITIZER)) ==
+        r.spa.presses.end());
+}
+
 static void test_queued_presses_are_separate() {
   Rig r;
   r.spa.presses.clear();
@@ -294,7 +425,7 @@ int main() {
   test_water_temperature_needs_steady_display();
   test_fahrenheit_is_rounded();
   test_error_is_reported_and_cleared();
-  test_sanitizer_hours_are_not_a_temperature();
+  test_sanitizer_hours_are_decoded_and_not_temperature_or_error();
   test_out_of_order_digit_frames_are_ignored();
   test_slow_blink_is_not_mistaken_for_water_temperature();
   test_target_is_read_during_blinks_only();
@@ -305,6 +436,14 @@ int main() {
   test_setting_target_gives_up_when_spa_ignores_buttons();
   test_target_is_probed_again_after_swallowed_press();
   test_slow_blink_does_not_confuse_controller();
+  test_single_sanitizer_press_turns_on_led_state();
+  test_sanitizer_hours_converge_without_overshoot();
+  test_setting_current_sanitizer_hours_issues_no_presses();
+  test_sanitizer_turns_off_after_cycle();
+  test_unresponsive_sanitizer_times_out_and_releases();
+  test_sanitizer_aborts_after_unseen_presses();
+  test_sanitizer_on_at_unknown_hours_still_reaches_goal();
+  test_sanitizer_request_is_rejected_during_temperature_adjustment();
   test_queued_presses_are_separate();
   std::printf(failures ? "%d failed\n" : "all passed\n", failures);
   return failures != 0;

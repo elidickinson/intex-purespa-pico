@@ -49,6 +49,15 @@ static std::optional<uint8_t> temperature(const Display &d) {
   return value;
 }
 
+static std::optional<uint8_t> sanitizer_hours(const Display &d) {
+  if (d[3] != 'H' || !is_digit(d[0]) || !is_digit(d[1]) || !is_digit(d[2]))
+    return std::nullopt;
+  uint8_t hours = (d[0] - '0') * 100 + (d[1] - '0') * 10 + (d[2] - '0');
+  if (hours < 3 || hours > 8)
+    return std::nullopt;
+  return hours;
+}
+
 void Decoder::feed(uint16_t frame) {
   uint16_t pos_bits = frame & DIGIT_POS_MASK;
   if (pos_bits) {
@@ -64,8 +73,13 @@ void Decoder::feed(uint16_t frame) {
       on_display();
     return;
   }
-  if (frame & led::FRAME)
+  if (frame & led::FRAME) {
     status_.leds = frame;
+    if (!(frame & led::SANITIZER)) {
+      status_.sanitizer_hours = 0;
+      sanitizer_candidate_.reset();
+    }
+  }
 }
 
 void Decoder::on_display() {
@@ -79,9 +93,15 @@ void Decoder::on_display() {
     count_++;
     if (count_ == CONFIRM) {
       if (blank) {
-        // The blank phase of a blink: the previous value phase is confirmed as the target
+        // The blank phase confirms the candidate of the type that was blinking
         if (candidate_) {
           status_.target_temperature = *candidate_;
+          candidate_.reset();
+          sanitizer_candidate_.reset();  // a temp blink cannot also be an hours edit
+        }
+        if (sanitizer_candidate_) {
+          status_.sanitizer_hours = *sanitizer_candidate_;
+          sanitizer_candidate_.reset();
           candidate_.reset();
         }
         if (blink_count_ < UINT8_MAX)
@@ -89,23 +109,34 @@ void Decoder::on_display() {
       } else if (display_[0] == 'E') {
         status_.error = {display_[0], display_[1], display_[2], 0};
       } else if (auto t = temperature(display_); t && run_after_blank_) {
-        // First value run after a blank: a blink's value phase, or the water temperature
-        // returning after a blink that ended on a blank. The same value appearing again after
-        // the next blank confirms it early; otherwise it only confirms if another blank follows
-        // before STEADY displays. A blink value is shown ~630 ms at most, well under STEADY.
+        // Value after a blank is a blink candidate; a repeated value confirms it early
+        sanitizer_candidate_.reset();  // the display shows a temperature, not hours
         if (candidate_ && *candidate_ == *t) {
           status_.target_temperature = *t;
           candidate_.reset();
         } else {
           candidate_ = t;
         }
+      } else if (auto hours = sanitizer_hours(display_); hours && run_after_blank_) {
+        candidate_.reset();  // the display shows hours, not a temperature
+        if (sanitizer_candidate_ && *sanitizer_candidate_ == *hours) {
+          status_.sanitizer_hours = *hours;
+          sanitizer_candidate_.reset();
+        } else {
+          sanitizer_candidate_ = hours;
+        }
       }
     } else if (count_ == STEADY) {
-      // A value that persists this long is the water temperature, blink or not: the blink value
-      // run keeps being interrupted by blank phases, so it never reaches STEADY
+      // Persistent display is steady water temperature or sanitizer hours, not a blink value
       if (auto t = temperature(display_)) {
         status_.current_temperature = *t;
         status_.error = {};
+        candidate_.reset();
+        sanitizer_candidate_.reset();
+        blink_count_ = 0;
+      } else if (auto hours = sanitizer_hours(display_)) {
+        status_.sanitizer_hours = *hours;
+        sanitizer_candidate_.reset();
         candidate_.reset();
         blink_count_ = 0;
       }
@@ -115,7 +146,8 @@ void Decoder::on_display() {
 }
 
 bool Controller::set_target(uint8_t temperature, uint32_t now) {
-  if (temperature < MIN_TARGET || temperature > MAX_TARGET || !(decoder_.status().leds & led::POWER))
+  if (temperature < MIN_TARGET || temperature > MAX_TARGET || !(decoder_.status().leds & led::POWER) ||
+      adjusting_sanitizer())
     return false;
   if (!setpoint_)
     phase_ = Phase::WAKE;
@@ -124,13 +156,23 @@ bool Controller::set_target(uint8_t temperature, uint32_t now) {
   return true;
 }
 
+bool Controller::set_sanitizer_hours(uint8_t hours, uint32_t now) {
+  if ((hours != 0 && hours != 3 && hours != 5 && hours != 8) ||
+      !(decoder_.status().leds & led::POWER) || adjusting())
+    return false;
+  sanitizer_setpoint_ = hours;
+  sanitizer_setpoint_at_ = now;
+  sanitizer_waiting_ = false;
+  unseen_presses_ = 0;
+  return true;
+}
+
 void Controller::update(uint32_t now) {
   const Status &s = decoder_.status();
-  // The target is only shown after pressing UP/DOWN; the first press does not change it. Retried
-  // until the target is known, in case a press is swallowed.
+  // The target is only shown after pressing UP/DOWN; retry until known if a press was swallowed.
   if (!(s.leds & led::POWER)) {
     probed_ = false;
-  } else if (!adjusting() && !decoder_.blinking() && !s.target_temperature &&
+  } else if (!adjusting() && !adjusting_sanitizer() && !decoder_.blinking() && !s.target_temperature &&
              (!probed_ || now - probed_at_ >= PROBE_RETRY_MS)) {
     probed_ = true;
     probed_at_ = now;
@@ -150,14 +192,16 @@ void Controller::update(uint32_t now) {
 
   if (setpoint_) {
     adjust(now);
+  } else if (sanitizer_setpoint_) {
+    adjust_sanitizer(now);
   } else if (!presses_.empty()) {
     start_press(presses_.front(), now);
     presses_.pop_front();
   }
 }
 
-void Controller::start_press(Button button, uint32_t now) {
-  held_ = button;
+void Controller::start_press(uint16_t frame_code, uint32_t now) {
+  held_ = frame_code;
   short_press_ = true;
   pressed_at_ = now;
 }
@@ -179,14 +223,12 @@ void Controller::adjust(uint32_t now) {
     finish(now);
     return;
   }
-  // The value shown as the target lags a held button by up to one blank phase. As soon as it
-  // reaches or crosses the setpoint, stop pressing and let the blink settle; the final value is
-  // then confirmed (or rejected as the water temperature) and re-evaluated here.
+  // Stop on reaching/crossing the target, then let the blink settle before re-evaluating.
   if (phase_ == Phase::SETTLE) {
     if (decoder_.blinking())
       return;
     phase_ = Phase::WAKE;
-    return;  // settled: re-evaluate on the next update with the confirmed value
+    return;
   }
   bool crossed = direction_would_be_(s) == Button::UP
                      ? decoder_.shown_target() >= setpoint_
@@ -202,7 +244,7 @@ void Controller::adjust(uint32_t now) {
   switch (phase_) {
     case Phase::WAKE:
       if (!decoder_.blinking()) {
-        start_press(direction, now);
+        start_press(static_cast<uint16_t>(direction), now);
         woke_at_ = now;
         phase_ = Phase::WAIT_BLINK;
         return;
@@ -210,9 +252,8 @@ void Controller::adjust(uint32_t now) {
       break;
     case Phase::WAIT_BLINK:
       if (s.target_temperature == 0 && decoder_.blinking() && now - woke_at_ < BLINK_WAIT_MS)
-        return;  // blink started, waiting for the target to be captured
+        return;
       if (s.target_temperature == 0) {
-        // Blink never started or no target captured; press again
         release(now);
         phase_ = Phase::WAKE;
         woke_at_ = now;
@@ -223,7 +264,6 @@ void Controller::adjust(uint32_t now) {
       if (decoder_.blinking()) {
         last_blink_at_ = now;
       } else if (now - last_blink_at_ >= STALL_MS) {
-        // The press is not registering or the blink ended; press again
         release(now);
         phase_ = Phase::WAKE;
         woke_at_ = now;
@@ -231,16 +271,70 @@ void Controller::adjust(uint32_t now) {
       }
       break;
     case Phase::SETTLE:
-      break;  // handled above
-    }
+      break;
+  }
   phase_ = Phase::HOLD;
-  if (held_ != direction)
-    held_ = direction;
+  if (held_ != static_cast<uint16_t>(direction))
+    held_ = static_cast<uint16_t>(direction);
+}
+
+void Controller::adjust_sanitizer(uint32_t now) {
+  const Status &s = decoder_.status();
+  if (now - sanitizer_setpoint_at_ >= SANITIZER_TIMEOUT_MS || !(s.leds & led::POWER)) {
+    finish_sanitizer(now);
+    return;
+  }
+  bool on = s.leds & led::SANITIZER;
+  uint8_t shown_hours = decoder_.shown_sanitizer_hours();
+  bool reached = *sanitizer_setpoint_ == 0 ? !on : on && shown_hours == *sanitizer_setpoint_;
+  if (reached) {
+    finish_sanitizer(now);
+    return;
+  }
+
+  // Each accepted press cycles off/3h/5h/8h/off; wait for the display or LED to prove it
+  // advanced. A press that appears swallowed is retried; after MAX_UNSEEN unobserved presses
+  // the flow aborts (the button code or LED mask is likely wrong - both are unverified).
+  if (sanitizer_waiting_) {
+    bool changed = on != sanitizer_before_on_ || shown_hours != sanitizer_before_hours_;
+    if (changed) {
+      sanitizer_waiting_ = false;
+      unseen_presses_ = 0;
+    } else if (now - sanitizer_pressed_at_ < STALL_MS) {
+      return;
+    } else {
+      sanitizer_waiting_ = false;  // retry a swallowed press
+      if (++unseen_presses_ >= MAX_UNSEEN_PRESSES) {
+        finish_sanitizer(now);
+        return;
+      }
+    }
+  }
+  if (on && shown_hours == 0) {
+    // The panel does not show the selected hours steadily; wait for the blink to reveal them.
+    // Bounded: after STALL_MS a press is sent anyway - cycling once cannot lose more than the
+    // cycle length, and the LED state keeps the switch truthful.
+    if (now - sanitizer_setpoint_at_ < STALL_MS)
+      return;
+  }
+
+  sanitizer_before_on_ = on;
+  sanitizer_before_hours_ = shown_hours;
+  sanitizer_pressed_at_ = now;
+  sanitizer_waiting_ = true;
+  start_press(static_cast<uint16_t>(Button::SANITIZER), now);
 }
 
 void Controller::finish(uint32_t now) {
   setpoint_ = 0;
   phase_ = Phase::WAKE;
+  if (held_)
+    release(now);
+}
+
+void Controller::finish_sanitizer(uint32_t now) {
+  sanitizer_setpoint_.reset();
+  sanitizer_waiting_ = false;
   if (held_)
     release(now);
 }

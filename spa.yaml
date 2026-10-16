@@ -41,6 +41,10 @@ purespa:
   bubble:
     name: Bubble
     icon: mdi:chart-bubble
+  sanitizer:
+    name: Sanitizer
+  sanitizer_hours:
+    name: Sanitizer Hours
   error_text:
     name: Error    
 
