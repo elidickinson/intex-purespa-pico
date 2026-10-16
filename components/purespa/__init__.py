@@ -3,7 +3,7 @@ import esphome.config_validation as cv
 from esphome.components import climate, switch, text_sensor
 from esphome.const import CONF_ID
 
-DEPENDENCIES = ["text_sensor", "switch", "climate"]
+AUTO_LOAD = ["text_sensor", "switch", "climate"]
 
 CONF_CLIMATE = "climate"
 CONF_POWER = "power"

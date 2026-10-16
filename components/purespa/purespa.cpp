@@ -52,9 +52,14 @@ void PureSpa::loop() {
       bus_.release();
   }
 
-  // The displayed target is transient while adjusting
-  if (controller_.adjusting())
+  // The displayed target is transient while adjusting; switches, errors and temperatures
+  // are published as usual
+  if (controller_.adjusting()) {
+    const Status &adjusting_status = decoder_.status();
+    if (adjusting_status != published_)
+      publish(adjusting_status);
     return;
+  }
 
   const Status &status = decoder_.status();
   if (requested_target_) {
@@ -111,6 +116,11 @@ void PureSpa::set_state(Button button, uint16_t mask, bool state) {
 }
 
 void PureSpa::set_target(float temperature) {
+  if (!std::isfinite(temperature)) {
+    ESP_LOGW(TAG, "Invalid target temperature");
+    force_publish_ = true;
+    return;
+  }
   uint8_t target = std::lround(temperature);
   if (controller_.set_target(target, millis())) {
     ESP_LOGI(TAG, "Set target %u", target);

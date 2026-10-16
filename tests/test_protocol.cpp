@@ -36,6 +36,7 @@ struct FakeSpa {
   bool filter = false;
   int water = 38;
   int target = 37;
+  uint32_t blink_period = 500;
   std::vector<Button> presses;
 
   std::optional<Button> held;
@@ -74,7 +75,7 @@ struct FakeSpa {
 
   std::string display(uint32_t now) const {
     char text[5];
-    if (!power || (now < setting_until && (now - setting_at) / 500 % 2))
+    if (!power || (now < setting_until && ((now - setting_at) / blink_period) % 2))
       return "    ";
     std::snprintf(text, sizeof text, "%03dC", now < setting_until ? target : water);
     return text;
@@ -143,15 +144,64 @@ static void test_sanitizer_hours_are_not_a_temperature() {
   CHECK_EQ(d.status().current_temperature, 0);
 }
 
+static void test_out_of_order_digit_frames_are_ignored() {
+  Decoder d;
+  // Valid temperature first, then stray out-of-order frames
+  show(d, "038C", 150);
+  d.feed(digit_frame(2, '5'));
+  d.feed(digit_frame(1, '9'));
+  show(d, "038C", 150);
+  CHECK_EQ(d.status().current_temperature, 38);
+  CHECK_EQ(d.status().target_temperature, 0);
+}
+
+static void test_slow_blink_is_not_mistaken_for_water_temperature() {
+  Decoder d;
+  // Blank for a long time, then a value that stays: that value is the water temperature
+  // (a real blink value alternates with blanks)
+  show(d, "    ", 200);
+  CHECK_EQ(d.status().current_temperature, 0);
+  show(d, "040C", 200);
+  CHECK_EQ(d.status().current_temperature, 40);
+  // The long-blank phase did not register as a blink, so no target was captured
+  CHECK_EQ(d.status().target_temperature, 0);
+}
+
+static void test_target_is_read_during_blinks_only() {
+  Decoder d;
+  show(d, "038C", 150);  // learn water temp
+  // Blink: blank, then value. The value becomes a candidate, confirmed as target by the next blank.
+  show(d, "    ", 3);
+  show(d, "040C", 3);
+  CHECK_EQ(d.status().target_temperature, 0);
+  show(d, "    ", 3);
+  CHECK_EQ(d.status().target_temperature, 40);
+  CHECK_EQ(d.status().current_temperature, 38);
+  // The same value seen again in the next blink phase confirms it at once
+  show(d, "040C", 3);
+  CHECK_EQ(d.status().target_temperature, 40);
+  // A changed value in a blink confirms on the next blank
+  show(d, "    ", 3);
+  show(d, "041C", 3);
+  show(d, "    ", 3);
+  CHECK_EQ(d.status().target_temperature, 41);
+  // Blink ends with a steady temperature: water temp again, never the target
+  // (the candidate 41 was confirmed by the blank; 42 persists = water temp)
+  show(d, "042C", 150);
+  CHECK_EQ(d.status().current_temperature, 42);
+  CHECK_EQ(d.status().target_temperature, 41);
+}
+
 static void test_target_is_probed_once_and_water_temp_not_mistaken_for_it() {
   Rig r;
   CHECK_EQ(r.decoder.status().current_temperature, 38);
   CHECK_EQ(r.decoder.status().target_temperature, 37);
-  CHECK_EQ(r.spa.presses.size(), 1);
+  // One DOWN probe at boot (possibly retried once), no target changes
+  CHECK(r.spa.presses.size() <= 2);
   CHECK(r.spa.presses[0] == Button::DOWN);
   r.run(20000);
   CHECK_EQ(r.decoder.status().target_temperature, 37);
-  CHECK_EQ(r.spa.presses.size(), 1);
+  CHECK(r.spa.presses.size() <= 2);
 }
 
 static void test_spa_is_never_switched_on() {
@@ -192,9 +242,40 @@ static void test_setting_target_gives_up_when_spa_ignores_buttons() {
   Rig r;
   r.spa.responsive = false;
   CHECK(r.controller.set_target(40, r.now));
-  r.run(Controller::TARGET_TIMEOUT_MS + 100);
+  r.run(Controller::TARGET_TIMEOUT_MS + 500);
   CHECK(!r.controller.adjusting());
   CHECK(!r.controller.held());
+}
+
+static void test_target_is_probed_again_after_swallowed_press() {
+  Rig r;
+  r.spa.power = false;  // no probe during construction
+  r.run(2000);
+  r.spa.presses.clear();
+  // Wipe the learned state: a fresh power-up knows nothing
+  r.controller.~Controller();
+  new (&r.controller) Controller(r.decoder);
+  r.decoder.~Decoder();
+  new (&r.decoder) Decoder();
+  r.spa.power = true;
+  r.spa.responsive = false;  // presses are swallowed
+  r.run(Controller::PROBE_RETRY_MS + 2000);
+  CHECK(r.spa.presses.size() >= 2);  // repeated probe presses
+  r.spa.responsive = true;
+  r.run(8000);
+  CHECK_EQ(r.decoder.status().target_temperature, 37);
+}
+
+static void test_slow_blink_does_not_confuse_controller() {
+  // A slower blink (600 ms phases): still under the 630 ms steady threshold, the controller
+  // must converge
+  Rig r;
+  r.spa.blink_period = 600;
+  CHECK(r.controller.set_target(40, r.now));
+  r.run(60000);
+  CHECK_EQ(r.spa.target, 40);
+  CHECK_EQ(r.decoder.status().target_temperature, 40);
+  CHECK(r.decoder.status().current_temperature <= 40);  // water temp, not the target
 }
 
 static void test_queued_presses_are_separate() {
@@ -214,11 +295,16 @@ int main() {
   test_fahrenheit_is_rounded();
   test_error_is_reported_and_cleared();
   test_sanitizer_hours_are_not_a_temperature();
+  test_out_of_order_digit_frames_are_ignored();
+  test_slow_blink_is_not_mistaken_for_water_temperature();
+  test_target_is_read_during_blinks_only();
   test_target_is_probed_once_and_water_temp_not_mistaken_for_it();
   test_spa_is_never_switched_on();
   test_target_is_raised_and_lowered();
   test_setting_current_target_finishes_at_once();
   test_setting_target_gives_up_when_spa_ignores_buttons();
+  test_target_is_probed_again_after_swallowed_press();
+  test_slow_blink_does_not_confuse_controller();
   test_queued_presses_are_separate();
   std::printf(failures ? "%d failed\n" : "all passed\n", failures);
   return failures != 0;

@@ -110,25 +110,28 @@ struct Status {
  * Decodes received frames into a Status.
  *
  * The display shows the water temperature when steady. After UP or DOWN is pressed it blinks the
- * target temperature for a few seconds; each blank phase increments blink_count_. A displayed
- * temperature is taken as the target only during the first blinks, so the water temperature shown
- * when blinking ends is not mistaken for the target.
+ * target temperature: alternating blank and value, ending on either. A value run that starts
+ * after a blank is therefore a blink's value phase, or - if the blink ended on a blank - the
+ * returning water temperature. Such a value becomes a candidate; it is confirmed as the target
+ * when the next blank appears (a real blink value never lasts that long) and rejected when the
+ * run persists for STEADY displays (~630 ms, the water temperature). shown_target() returns the
+ * candidate if one is pending, so a held button's changes are visible immediately; status()
+ * carries the confirmed value only. Error codes are recognized when the first character is 'E'
+ * and cleared once a temperature is steady.
  */
 class Decoder {
  public:
   void feed(uint16_t frame);
   const Status &status() const { return status_; }
+  // The value currently being shown as the target, confirmed or pending
+  uint8_t shown_target() const { return candidate_.value_or(status_.target_temperature); }
+  // True while the display alternates blank/value, i.e. the target is being shown.
+  // Cleared once a steady temperature has been displayed for STEADY displays (~630 ms).
   bool blinking() const { return blink_count_ != 0; }
-  // Accept displayed temperatures as the target (UP/DOWN is being held)
-  void track_target() { blink_count_ = 1; }
-  // Ignore displayed temperatures as the target until the display is steady again
-  void freeze_target() { blink_count_ = FROZEN; }
 
  private:
-  static constexpr uint16_t CONFIRM = 3;     // identical displays before a value is used
-  static constexpr uint16_t STEADY = 150;    // identical displays (~630 ms) before the display is steady
-  static constexpr uint8_t TARGET_BLINKS = 5;
-  static constexpr uint8_t FROZEN = 10;
+  static constexpr uint16_t CONFIRM = 3;   // identical displays before a value is used
+  static constexpr uint16_t STEADY = 150;  // identical displays (~630 ms) before the display is steady
 
   void on_display();
 
@@ -138,6 +141,9 @@ class Decoder {
   Display last_display_{};
   uint16_t count_ = 0;
   uint8_t blink_count_ = 0;
+  bool prev_was_blank_ = false;   // previous display was blank
+  bool run_after_blank_ = false;  // the current identical-display run started right after a blank
+  std::optional<uint8_t> candidate_;  // value seen after a blank, target if confirmed
 };
 
 /**
@@ -145,14 +151,17 @@ class Decoder {
  * reply to. Never blocks; call update() regularly with the current time in ms.
  *
  * The target is changed the way a person would: press UP/DOWN once to show the blinking target,
- * then hold the button until the displayed target matches, reversing on overshoot.
+ * then hold the button until the displayed target matches, reversing on overshoot. If the display
+ * stops blinking while held (press not registering), the button is released and pressed again.
  */
 class Controller {
  public:
   static constexpr uint32_t PRESS_MS = 100;
   static constexpr uint32_t GAP_MS = 100;  // released time between presses
   static constexpr uint32_t BLINK_WAIT_MS = 400;
+  static constexpr uint32_t STALL_MS = 1500;  // hold re-pressed when the display stops blinking
   static constexpr uint32_t TARGET_TIMEOUT_MS = 30000;
+  static constexpr uint32_t PROBE_RETRY_MS = 3000;
   static constexpr uint8_t MIN_TARGET = 20;
   static constexpr uint8_t MAX_TARGET = 40;
 
@@ -168,12 +177,13 @@ class Controller {
   bool adjusting() const { return setpoint_ != 0; }
 
  private:
-  enum class Phase { WAKE, WAIT_BLINK, HOLD };
+  enum class Phase { WAKE, WAIT_BLINK, HOLD, SETTLE };
 
   void start_press(Button button, uint32_t now);
   void release(uint32_t now);
   void adjust(uint32_t now);
   void finish(uint32_t now);
+  Button direction_would_be_(const Status &s) const { return setpoint_ > s.target_temperature ? Button::UP : Button::DOWN; }
 
   Decoder &decoder_;
   std::deque<Button> presses_;
@@ -187,7 +197,9 @@ class Controller {
   uint32_t setpoint_at_ = 0;
   Phase phase_ = Phase::WAKE;
   uint32_t woke_at_ = 0;
+  uint32_t last_blink_at_ = 0;
   bool probed_ = false;
+  uint32_t probed_at_ = 0;
 };
 
 }  // namespace purespa

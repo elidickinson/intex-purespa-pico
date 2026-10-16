@@ -44,7 +44,7 @@ static void irq_handler() {
 // The program replies to a received frame equal to X; set_x loads X from the TX FIFO
 static void set_x(uint32_t x) {
   pio_sm_put_blocking(pio, sm, x);
-  pio_sm_exec(pio, sm, pio_encode_jmp(offset + sbh20_offset_set_x));
+  pio_sm_exec_wait_blocking(pio, sm, pio_encode_jmp(offset + sbh20_offset_set_x));
 }
 
 void PioBus::setup(unsigned base_pin) {
@@ -69,6 +69,8 @@ void PioBus::setup(unsigned base_pin) {
 
   pio_sm_set_consecutive_pindirs(pio, sm, data_pin, 3, false);
   pio_sm_clear_fifos(pio, sm);
+  // The RX side needs the depth: frames arrive every ~660 µs while the main loop may stall longer
+  sm_config_set_fifo_join(&c, PIO_FIFO_JOIN_RX);
 
   pio_set_irq0_source_enabled(pio, pis_interrupt0, true);
   irq_set_exclusive_handler(PIO0_IRQ_0, irq_handler);

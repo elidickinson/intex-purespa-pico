@@ -44,6 +44,8 @@ static std::optional<uint8_t> temperature(const Display &d) {
   int value = (d[0] - '0') * 100 + (d[1] - '0') * 10 + (d[2] - '0');
   if (d[3] == 'F')
     value = std::lround((value - 32) * 5 / 9.0);
+  if (value < 0)
+    value = 0;
   return value;
 }
 
@@ -67,33 +69,49 @@ void Decoder::feed(uint16_t frame) {
 }
 
 void Decoder::on_display() {
+  bool blank = display_[0] == ' ' && display_[1] == ' ' && display_[2] == ' ';
   if (display_ != last_display_) {
     last_display_ = display_;
     count_ = 0;
+    run_after_blank_ = prev_was_blank_;
   }
-  if (count_ >= STEADY)
-    return;
-  count_++;
-
-  if (count_ == CONFIRM) {
-    if (display_[0] == ' ' && display_[1] == ' ' && display_[2] == ' ') {
-      if (blink_count_ < UINT8_MAX)
-        blink_count_++;
-    } else if (display_[0] == 'E') {
-      status_.error = {display_[0], display_[1], display_[2], 0};
-    } else if (auto t = temperature(display_)) {
-      if (*t != status_.target_temperature && blink_count_ && blink_count_ < TARGET_BLINKS) {
-        status_.target_temperature = *t;
-        blink_count_ = 1;
+  if (count_ < STEADY) {
+    count_++;
+    if (count_ == CONFIRM) {
+      if (blank) {
+        // The blank phase of a blink: the previous value phase is confirmed as the target
+        if (candidate_) {
+          status_.target_temperature = *candidate_;
+          candidate_.reset();
+        }
+        if (blink_count_ < UINT8_MAX)
+          blink_count_++;
+      } else if (display_[0] == 'E') {
+        status_.error = {display_[0], display_[1], display_[2], 0};
+      } else if (auto t = temperature(display_); t && run_after_blank_) {
+        // First value run after a blank: a blink's value phase, or the water temperature
+        // returning after a blink that ended on a blank. The same value appearing again after
+        // the next blank confirms it early; otherwise it only confirms if another blank follows
+        // before STEADY displays. A blink value is shown ~630 ms at most, well under STEADY.
+        if (candidate_ && *candidate_ == *t) {
+          status_.target_temperature = *t;
+          candidate_.reset();
+        } else {
+          candidate_ = t;
+        }
+      }
+    } else if (count_ == STEADY) {
+      // A value that persists this long is the water temperature, blink or not: the blink value
+      // run keeps being interrupted by blank phases, so it never reaches STEADY
+      if (auto t = temperature(display_)) {
+        status_.current_temperature = *t;
+        status_.error = {};
+        candidate_.reset();
+        blink_count_ = 0;
       }
     }
-  } else if (count_ == STEADY) {
-    if (auto t = temperature(display_)) {
-      status_.current_temperature = *t;
-      status_.error = {};
-    }
-    blink_count_ = 0;
   }
+  prev_was_blank_ = blank;
 }
 
 bool Controller::set_target(uint8_t temperature, uint32_t now) {
@@ -108,11 +126,14 @@ bool Controller::set_target(uint8_t temperature, uint32_t now) {
 
 void Controller::update(uint32_t now) {
   const Status &s = decoder_.status();
-  // The target is only shown after pressing UP/DOWN; the first press does not change it
+  // The target is only shown after pressing UP/DOWN; the first press does not change it. Retried
+  // until the target is known, in case a press is swallowed.
   if (!(s.leds & led::POWER)) {
     probed_ = false;
-  } else if (!probed_ && !s.target_temperature && s.current_temperature && !decoder_.blinking() && !adjusting()) {
+  } else if (!adjusting() && !decoder_.blinking() && !s.target_temperature &&
+             (!probed_ || now - probed_at_ >= PROBE_RETRY_MS)) {
     probed_ = true;
+    probed_at_ = now;
     press(Button::DOWN);
   }
 
@@ -154,9 +175,26 @@ void Controller::adjust(uint32_t now) {
     finish(now);
     return;
   }
-  if (s.target_temperature == setpoint_) {
+  if (decoder_.shown_target() == setpoint_) {
     finish(now);
-    decoder_.freeze_target();
+    return;
+  }
+  // The value shown as the target lags a held button by up to one blank phase. As soon as it
+  // reaches or crosses the setpoint, stop pressing and let the blink settle; the final value is
+  // then confirmed (or rejected as the water temperature) and re-evaluated here.
+  if (phase_ == Phase::SETTLE) {
+    if (decoder_.blinking())
+      return;
+    phase_ = Phase::WAKE;
+    return;  // settled: re-evaluate on the next update with the confirmed value
+  }
+  bool crossed = direction_would_be_(s) == Button::UP
+                     ? decoder_.shown_target() >= setpoint_
+                     : decoder_.shown_target() <= setpoint_;
+  if (crossed) {
+    if (held_)
+      release(now);
+    phase_ = Phase::SETTLE;
     return;
   }
 
@@ -171,21 +209,38 @@ void Controller::adjust(uint32_t now) {
       }
       break;
     case Phase::WAIT_BLINK:
-      if (!decoder_.blinking() && now - woke_at_ < PRESS_MS + GAP_MS + BLINK_WAIT_MS)
+      if (s.target_temperature == 0 && decoder_.blinking() && now - woke_at_ < BLINK_WAIT_MS)
+        return;  // blink started, waiting for the target to be captured
+      if (s.target_temperature == 0) {
+        // Blink never started or no target captured; press again
+        release(now);
+        phase_ = Phase::WAKE;
+        woke_at_ = now;
         return;
+      }
       break;
     case Phase::HOLD:
+      if (decoder_.blinking()) {
+        last_blink_at_ = now;
+      } else if (now - last_blink_at_ >= STALL_MS) {
+        // The press is not registering or the blink ended; press again
+        release(now);
+        phase_ = Phase::WAKE;
+        woke_at_ = now;
+        return;
+      }
       break;
-  }
+    case Phase::SETTLE:
+      break;  // handled above
+    }
   phase_ = Phase::HOLD;
-  if (held_ != direction) {
+  if (held_ != direction)
     held_ = direction;
-    decoder_.track_target();
-  }
 }
 
 void Controller::finish(uint32_t now) {
   setpoint_ = 0;
+  phase_ = Phase::WAKE;
   if (held_)
     release(now);
 }
