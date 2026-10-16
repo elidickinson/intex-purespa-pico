@@ -1,8 +1,10 @@
 #!/bin/bash
 # Syntax-check capture/capture.cpp with the real cross-compiler (offline).
-# Run from the repo root: zsh capture/check.sh
+# Run from the repo root: bash capture/check.sh
+# Requires the PlatformIO packages under /tmp/picow (reinstall with a short
+# 'esphome compile' if missing, or point FW/TC at another arduino-pico install):
 # Regenerate the PIO header first if sbh20.pio changed:
-#   /tmp/picow/pio/packages/tool-pioasm-rp2040-earlephilhower/pioasm capture/sbh20.pio capture/sbh20.pio.h
+#   /tmp/picow/pio/packages/tool-pioasm-rp2040-earlephilhower/pioasm  # adjust if your PlatformIO packages live elsewhere capture/sbh20.pio capture/sbh20.pio.h
 TC=/tmp/picow/pio/packages/toolchain-rp2040-earlephilhower/bin
 FW=/tmp/picow/pio/packages/framework-arduinopico
 cd "$(dirname "$0")"

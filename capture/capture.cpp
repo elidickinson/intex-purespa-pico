@@ -35,9 +35,11 @@
 #ifndef WIFI_PASS
 #define WIFI_PASS "password"
 #endif
-// SET THIS to the computer running `nc -lu 1514`; unicast, not broadcast
+// SET THIS to the computer running `nc -lu 1514`; unicast, not broadcast.
+// A wrong host fails silently and looks like a wiring fault, so the build
+// refuses to compile until this is set.
 #ifndef LOG_HOST
-#define LOG_HOST "192.168.1.100"
+#error "Set LOG_HOST to your computer's IP, e.g. -DLOG_HOST=\"192.168.1.100\""
 #endif
 #ifndef LOG_PORT
 #define LOG_PORT 1514
@@ -101,15 +103,23 @@ static char line[64];
 static char pkt[1200];
 static size_t pkt_len = 0;
 
+static void send(const char *data, size_t len);
+static void flush_udp(uint32_t now);
+
 static void send(const char *data, size_t len) {
   // GOTCHA: with a USB host connected but not reading, Serial.write blocks for up
   // to 1 s per call (arduino-pico SerialUSB), which overflows the ring. Prefer
   // the UDP path; USB is for a bench setup only.
   Serial.write(data, len);
-  if (wifi_ok && pkt_len + len <= sizeof(pkt)) {
-    memcpy(pkt + pkt_len, data, len);
-    pkt_len += len;
-  }
+  if (!wifi_ok)
+    return;
+  // GOTCHA: at ~1500 frames/s a 200 ms flush window fills the 1200-byte packet
+  // about 4x over, so the buffer must flush on overflow, not only on the timer.
+  if (pkt_len + len > sizeof(pkt))
+    flush_udp(millis());
+  // Lines are bounded by line[64], so len always fits an empty packet.
+  memcpy(pkt + pkt_len, data, len);
+  pkt_len += len;
 }
 
 static void flush_udp(uint32_t now) {
@@ -157,10 +167,12 @@ void setup() {
   // program's `set pindirs, 1` can never switch DATA to output. This is the
   // strongest passivity guarantee here; keep it if the program is updated.
 
+  // Direction first: once the pads belong to PIO, their output enable must
+  // already read input - the only window where this file could drive a pin.
+  pio_sm_set_consecutive_pindirs(pio, sm, DATA_PIN, 3, false);
   pio_gpio_init(pio, DATA_PIN);
   pio_gpio_init(pio, CLK_PIN);
   pio_gpio_init(pio, CS_PIN);
-  pio_sm_set_consecutive_pindirs(pio, sm, DATA_PIN, 3, false);
 
   // RX-only: the FIFO join is safe here because nothing ever writes TX.
   // GOTCHA (from the production component): joining RX disables TX, whose
