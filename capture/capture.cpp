@@ -51,7 +51,7 @@ static void __not_in_flash_func(irq_handler)() {
   while (!pio_sm_is_rx_fifo_empty(pio, sm)) {
     uint32_t raw = pio_sm_get(pio, sm);
     if (raw == 0)
-      continue;  // pushed by set_x; never runs here, but cheap to skip
+      continue;  // echo of the set_x exec, never a frame
     uint32_t h = head;
     uint32_t next = (h + 1) % RING_SIZE;
     if (next == tail) {
@@ -124,13 +124,12 @@ void setup() {
   pio_sm_set_consecutive_pindirs(pio, sm, DATA_PIN, 3, false);
 
   pio_sm_clear_fifos(pio, sm);
-  sm_config_set_fifo_join(&c, PIO_FIFO_JOIN_RX);
   pio_set_irq0_source_enabled(pio, pis_interrupt0, true);
   irq_set_exclusive_handler(PIO0_IRQ_0, irq_handler);
   irq_set_enabled(PIO0_IRQ_0, true);
   pio_sm_init(pio, sm, offset, &c);
+  set_x(0xFFFFFFFF);  // matches nothing: armed before the SM runs, the PIO never drives DATA
   pio_sm_set_enabled(pio, sm, true);
-  set_x(0xFFFFFFFF);  // matches nothing: the PIO never drives DATA
 
   WiFi.mode(WIFI_STA);
   WiFi.begin(WIFI_SSID, WIFI_PASS);

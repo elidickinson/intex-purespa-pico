@@ -75,8 +75,8 @@ void PioBus::setup(unsigned base_pin) {
 
   pio_sm_set_consecutive_pindirs(pio, sm, data_pin, 3, false);
   pio_sm_clear_fifos(pio, sm);
-  // The RX side needs the depth: frames arrive every ~660 µs while the main loop may stall longer
-  sm_config_set_fifo_join(&c, PIO_FIFO_JOIN_RX);
+  // No FIFO join: joining RX would disable TX, and hold()/release() need it.
+  // Burst tolerance comes from the 1024-frame ring drained by the IRQ.
 
   pio_set_irq0_source_enabled(pio, pis_interrupt0, true);
   irq_set_exclusive_handler(PIO0_IRQ_0, irq_handler);
@@ -92,8 +92,8 @@ void PioBus::setup(unsigned base_pin) {
 #endif
 
   pio_sm_init(pio, sm, offset, &c);
+  release();  // arm X before the SM runs: its reset value 0 must never match a frame
   pio_sm_set_enabled(pio, sm, true);
-  release();
 }
 
 bool PioBus::read(uint16_t &frame) {
