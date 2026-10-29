@@ -50,7 +50,8 @@ static char to_char(uint16_t segments) {
   return '?';
 }
 
-static bool is_blank(const std::string &text) { return text == "    "; }
+// The temperature menu's blank phase keeps the unit: "   F"
+static bool is_blank(const std::string &text) { return text.compare(0, 3, "   ") == 0; }
 
 static std::optional<int> number_of(const std::string &text) {
   if (text.size() != 4)
@@ -373,8 +374,8 @@ void Controller::set_temperature(uint32_t now) {
         finish("already set");
         return;
       }
-      // The first press opens the menu; it may or may not change the target, so every step
-      // reads back the flashing value. With the target unknown, lower is the safer direction.
+      // Every press changes the target by one and flashes it; each step reads the value back.
+      // With the target unknown, lower is the safer direction.
       press(want > target.value_or(want) ? Button::UP : Button::DOWN, now);
       break;
     }

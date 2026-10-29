@@ -74,8 +74,9 @@ static void test_real_capture() {
 
 // Spa model, one display cycle per call (~12 ms). A button counts as pressed after the bus has
 // replied to 4 polls in a row, and only again after a poll without a reply; each press beeps for
-// 12 cycles. Up/Down and Salt open a flashing menu showing the current value; further presses
-// change it. The salt setting takes effect when its menu closes.
+// 12 cycles. Each Up/Down press changes the target and flashes it. Salt opens a flashing menu
+// showing the current setting; further presses change it, and it takes effect when the menu
+// closes.
 struct FakeSpa {
   bool responsive = true;
   int beep_delay = 0;  // cycles between a press registering and its beep
@@ -103,7 +104,9 @@ struct FakeSpa {
       std::snprintf(s, sizeof(s), "%03dH", salt_left);
     else
       std::snprintf(s, sizeof(s), "%03dF", water);
-    return menu != NONE && since % 40 >= 16 ? "    " : s;
+    if (menu != NONE && since % 40 >= 16)
+      return menu == TEMP ? "   F" : "    ";
+    return s;
   }
 
   uint16_t leds() const {
@@ -126,8 +129,7 @@ struct FakeSpa {
     } else if (b == Button::BUBBLES) {
       bubbles = !bubbles;
     } else if (b == Button::UP || b == Button::DOWN) {
-      if (menu == TEMP)
-        target = std::min(104, std::max(50, target + (b == Button::UP ? 1 : -1)));
+      target = std::min(104, std::max(50, target + (b == Button::UP ? 1 : -1)));
       menu = TEMP;
       menu_at = cycle;
     } else if (b == Button::SALT) {
@@ -276,9 +278,9 @@ static void test_temperature_is_read_back_and_set() {
   CHECK_EQ(rig.request("temp", "102"), "temp=102: done");
   CHECK_EQ(rig.spa.target, 102);
   CHECK_EQ(rig.d.target(), 102);
-  CHECK_EQ(long(rig.spa.presses.size()), 3L);  // open showing 100, 101, 102
+  CHECK_EQ(long(rig.spa.presses.size()), 4L);  // target unknown, so Down first: 99, 100, 101, 102
   CHECK_EQ(rig.request("temp", "102"), "temp=102: already set");
-  CHECK_EQ(long(rig.spa.presses.size()), 3L);
+  CHECK_EQ(long(rig.spa.presses.size()), 4L);
   CHECK_EQ(rig.request("temp", "99"), "temp=99: done");
   CHECK_EQ(rig.spa.target, 99);
 }
@@ -340,6 +342,30 @@ static void test_quickly_changed_value_is_not_water() {
   CHECK_EQ(d.target(), 101);
 }
 
+// As seen on the tub: the blank phase keeps the F, and the water returns straight after a blank
+static void test_temperature_menu_is_read() {
+  Decoder d;
+  auto display = [&](const char *text, int n) {
+    for (int i = 0; i < n; i++) {
+      for (int pos = 0; pos < 4; pos++) {
+        d.feed(NO_BEEP);
+        d.feed(digit_frame(pos, text[pos]) | NO_BEEP);
+      }
+    }
+  };
+  display("094F", 100);
+  for (const char *value : {"100F", "101F", "101F"}) {
+    display(value, 17);
+    display("   F", 25);
+  }
+  CHECK(d.menu_open());
+  CHECK_EQ(d.target(), 101);
+  display("093F", 150);
+  CHECK_EQ(d.water(), 93);
+  CHECK_EQ(d.target(), 101);
+  CHECK(!d.menu_open());
+}
+
 static void test_requests_run_in_order() {
   Rig rig;
   rig.run_ms(2000);
@@ -395,6 +421,7 @@ int main() {
   test_waits_for_a_menu_opened_on_the_panel();
   test_salt_while_running_sets_a_new_duration();
   test_quickly_changed_value_is_not_water();
+  test_temperature_menu_is_read();
   test_requests_run_in_order();
   test_schedule();
   if (failures) {
