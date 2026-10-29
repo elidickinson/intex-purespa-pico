@@ -489,7 +489,7 @@ void loop() {
   // After a stall, or when a full ring dropped the newest frames, what was just decoded may be
   // seconds old
   static uint32_t last_dropped = 0;
-  static uint32_t last_loop = 0;
+  static uint32_t last_loop = now;
   if (dropped != last_dropped || now - last_loop > 500) {
     last_dropped = dropped;
     controller.lost_data();
