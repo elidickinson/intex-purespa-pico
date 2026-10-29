@@ -80,6 +80,7 @@ static void test_real_capture() {
 struct FakeSpa {
   bool responsive = true;
   int beep_delay = 0;  // cycles between a press registering and its beep
+  bool beep_unheard = false;  // the press registers, but its beep never reaches the decoder
   int beep_in = -1;
   bool power = false, heater = false, bubbles = false, salt_on = false;
   int water = 94, target = 100, salt_setting = 3, salt_left = 0;
@@ -116,7 +117,7 @@ struct FakeSpa {
 
   void press(Button b) {
     presses.push_back(b);
-    beep_in = beep_delay;
+    beep_in = beep_unheard ? -1 : beep_delay;
     if (b == Button::POWER) {
       power = !power;
       heater = bubbles = salt_on = false;
@@ -308,6 +309,65 @@ static void test_late_beep_is_not_retried() {
   CHECK_EQ(long(rig.spa.presses.size()), 1L);
 }
 
+static void test_unheard_beep_is_not_pressed_again() {
+  Rig rig = powered_on();
+  rig.spa.beep_unheard = true;
+  CHECK_EQ(rig.request("bubbles", "on"), "bubbles=on: already on");
+  CHECK(rig.spa.bubbles);
+  CHECK_EQ(long(rig.spa.presses.size()), 1L);
+}
+
+// The flashing menu shows the press landed, so the menu isn't reopened
+static void test_unheard_beep_in_salt_menu_carries_on() {
+  Rig rig = powered_on();
+  rig.spa.beep_unheard = true;
+  CHECK_EQ(rig.request("salt", "5"), "salt=5: done");
+  CHECK_EQ(rig.spa.salt_left, 5);
+  CHECK_EQ(long(rig.spa.presses.size()), 2L);
+}
+
+static void test_dropped_frames_fail_the_request_and_wait_for_fresh_data() {
+  Rig rig = powered_on();
+  Request r;
+  parse_request("bubbles", "on", r);
+  rig.c.queue(r);
+  while (!rig.c.held())
+    rig.run_ms(12);
+  rig.c.lost_data();
+  CHECK(!rig.c.held());
+  std::string result;
+  CHECK(rig.c.take_result(result));
+  CHECK_EQ(result, "bubbles=on: failed: the Pico fell behind reading the bus");
+  size_t presses = rig.spa.presses.size();
+  rig.c.queue(r);
+  for (int i = 0; i < 90; i++) {
+    rig.step();
+    rig.now += 12;
+    CHECK(!rig.c.held());
+  }
+  CHECK_EQ(long(rig.spa.presses.size()), long(presses));
+  rig.run_ms(5000);
+  CHECK(rig.c.take_result(result));
+  CHECK(result == "bubbles=on: done" || result == "bubbles=on: already on");
+  CHECK(rig.spa.bubbles);
+}
+
+static void test_no_bus_data_fails_without_pressing() {
+  Rig rig = powered_on();
+  for (int i = 0; i < 100; i++) {
+    rig.now += 12;
+    rig.c.update(rig.now);  // the bus goes quiet
+  }
+  Request r;
+  parse_request("bubbles", "on", r);
+  rig.c.queue(r);
+  rig.c.update(rig.now);
+  CHECK(!rig.c.held());
+  std::string result;
+  CHECK(rig.c.take_result(result));
+  CHECK_EQ(result, "bubbles=on: failed: no data from the spa bus");
+}
+
 static void test_waits_for_a_menu_opened_on_the_panel() {
   Rig rig = powered_on();
   rig.spa.press(Button::SALT);  // someone opens the salt menu, showing 3H
@@ -418,6 +478,10 @@ int main() {
   test_temperature_limits();
   test_unanswered_press_is_retried_then_given_up();
   test_late_beep_is_not_retried();
+  test_unheard_beep_is_not_pressed_again();
+  test_unheard_beep_in_salt_menu_carries_on();
+  test_dropped_frames_fail_the_request_and_wait_for_fresh_data();
+  test_no_bus_data_fails_without_pressing();
   test_waits_for_a_menu_opened_on_the_panel();
   test_salt_while_running_sets_a_new_duration();
   test_quickly_changed_value_is_not_water();

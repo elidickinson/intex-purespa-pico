@@ -54,3 +54,59 @@ static inline pio_sm_config frames_program_get_default_config(uint offset) {
 }
 #endif
 
+// ----- //
+// reply //
+// ----- //
+
+#define reply_wrap_target 0
+#define reply_wrap 24
+#define reply_pio_version 0
+
+static __pio_const uint16_t reply_program_instructions[] = {
+            //     .wrap_target
+    0x20a2, //  0: wait   1 pin, 2
+    0x2022, //  1: wait   0 pin, 2
+    0x8080, //  2: pull   noblock
+    0xa027, //  3: mov    x, osr
+    0xe04f, //  4: set    y, 15
+    0x2021, //  5: wait   0 pin, 1
+    0x20a1, //  6: wait   1 pin, 1
+    0x4001, //  7: in     pins, 1
+    0x0085, //  8: jmp    y--, 5
+    0xa046, //  9: mov    y, isr
+    0xa0c3, // 10: mov    isr, null
+    0x00b3, // 11: jmp    x != y, 19
+    0x3fa2, // 12: wait   1 pin, 2               [31]
+    0xff5f, // 13: set    y, 31                  [31]
+    0xac42, // 14: nop                           [12]
+    0xe081, // 15: set    pindirs, 1
+    0x0990, // 16: jmp    y--, 16                [9]
+    0xe080, // 17: set    pindirs, 0
+    0x0002, // 18: jmp    2
+    0xa0e2, // 19: mov    osr, y
+    0x6068, // 20: out    null, 8
+    0x6041, // 21: out    y, 1
+    0x0060, // 22: jmp    !y, 0
+    0xa02b, // 23: mov    x, ~null
+    0x8080, // 24: pull   noblock
+            //     .wrap
+};
+
+#if !PICO_NO_HARDWARE
+static __pio_const struct pio_program reply_program = {
+    .instructions = reply_program_instructions,
+    .length = 25,
+    .origin = -1,
+    .pio_version = reply_pio_version,
+#if PICO_PIO_VERSION > 0
+    .used_gpio_ranges = 0x0
+#endif
+};
+
+static inline pio_sm_config reply_program_get_default_config(uint offset) {
+    pio_sm_config c = pio_get_default_sm_config();
+    sm_config_set_wrap(&c, offset + reply_wrap_target, offset + reply_wrap);
+    return c;
+}
+#endif
+

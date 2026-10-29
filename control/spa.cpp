@@ -251,6 +251,10 @@ bool Controller::take_result(std::string &out) {
 }
 
 void Controller::update(uint32_t now) {
+  if (d_.displays() != displays_seen_) {
+    displays_seen_ = d_.displays();
+    bus_at_ = now;
+  }
   if (!job_) {
     if (queue_.empty())
       return;
@@ -264,6 +268,11 @@ void Controller::update(uint32_t now) {
     finish("failed: timed out");
     return;
   }
+  // The state it would act on could be stale, and presses could land once the bus returns
+  if (now - bus_at_ >= BUS_MS) {
+    finish("failed: no data from the spa bus");
+    return;
+  }
   if (step_ == Step::PRESSING) {
     bool beeped = d_.beeps() != beeps_before_;
     if (!beeped && now - step_at_ < PRESS_MS)
@@ -275,13 +284,14 @@ void Controller::update(uint32_t now) {
   if (step_ == Step::SETTLING) {
     if (d_.beeping() || now - step_at_ < GAP_MS)
       return;
-    // A beep that comes after the release still acknowledges the press
-    if (d_.beeps() == beeps_before_) {
-      if (job_->kind == Request::PRESS || ++unacked_ >= MAX_UNACKED) {
+    // A beep that comes after the release still acknowledges the press, as does a new flashing
+    // menu value. Without either, start over: the beep may only have been missed, so the state is
+    // checked again before any new press.
+    if (d_.beeps() == beeps_before_ && d_.menu_seq() == seq_) {
+      if (job_->kind == Request::PRESS || ++unacked_ >= MAX_UNACKED)
         finish("failed: no beep, the spa didn't take the press");
-        return;
-      }
-      press(button_, now);
+      else
+        to(Step::START, now);
       return;
     }
     unacked_ = 0;
@@ -296,9 +306,9 @@ void Controller::run(uint32_t now) {
   const Request &r = *job_;
   if (step_ == Step::START && r.kind != Request::PRESS) {
     // A menu someone opened on the panel may still change the state; let it close first
-    if (!d_.settled()) {
+    if (!d_.settled() || d_.displays() < fresh_after_) {
       if (now - step_at_ >= MENU_CLOSE_MS)
-        finish("failed: the panel didn't settle (a menu kept flashing, or no data from the bus)");
+        finish("failed: a menu on the panel kept flashing");
       return;
     }
     if (r.kind != Request::POWER && !d_.on(led::POWER)) {
@@ -456,10 +466,16 @@ void Controller::set_salt(uint32_t now) {
 }
 
 void Controller::press(Button button, uint32_t now) {
-  button_ = button;
   held_ = button;
   beeps_before_ = d_.beeps();
+  seq_ = d_.menu_seq();
   to(Step::PRESSING, now);
+}
+
+void Controller::lost_data() {
+  fresh_after_ = d_.displays() + FRESH_DISPLAYS;
+  if (job_)
+    finish("failed: the Pico fell behind reading the bus");
 }
 
 void Controller::to(Step step, uint32_t now) {

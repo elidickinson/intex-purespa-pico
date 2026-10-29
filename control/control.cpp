@@ -2,8 +2,10 @@
 // HTTP API at http://spa.local/, and runs a weekly schedule. Over-the-air updates via
 // `uvx platformio run -e ota -t upload`.
 //
-// Read-only build: bus.pio cannot drive any pin. Requests run through the controller as usual,
-// but its presses are only logged ("would press ..."), so they fail with "no beep".
+// Presses: the reply program in bus.pio, on pio1, is the only code that can drive DATA, and only
+// low. It answers the poll for controller.held() and stops by itself at the spa's beep; the PIO
+// IRQ stops it after MAX_REPLIES answers. Neither depends on the main loop, which a web request
+// or an update can stall for seconds.
 //
 // Pins (hottub build-plan.md): GP3 = DATA, GP4 = CLOCK, GP5 = HOLD. The spa's panel 5 V feeds
 // VSYS; never connect USB while attached to the spa.
@@ -37,7 +39,6 @@
 static_assert(sizeof(WIFI_SSID) > 1 && sizeof(WIFI_PASS) > 1 && sizeof(WEB_PASS) > 1,
               "run `source wifi.env` before building; see platformio.ini");
 
-static constexpr bool READ_ONLY = true;
 static const char *const HOSTNAME = "spa";
 static const char *const TIMEZONE = "EST5EDT,M3.2.0,M11.1.0";  // New York
 static const char *const SCHEDULE_FILE = "/schedule.txt";
@@ -54,18 +55,41 @@ static volatile uint32_t head = 0;
 static volatile uint32_t tail = 0;
 static volatile uint32_t dropped = 0;
 
+// The WiFi driver's program also lives on pio1; with it, reply still fits
+static const PIO reply_pio = pio1;
+static uint reply_sm;
+static constexpr uint32_t NEVER = 0xFFFFFFFF;  // an X no 16-bit frame can equal
+// Answers per press at most, even if the spa never beeps; the panel's own presses take 7-13
+static constexpr uint32_t MAX_REPLIES = 20;
+static volatile uint16_t answering = 0;  // poll the reply program is answering, 0 if none
+static volatile uint32_t replies = 0;    // polls answered since it started
+
+static void set_reply_x(uint32_t x) {
+  // Only the newest value matters, so drop any the program hasn't taken yet
+  pio_sm_clear_fifos(reply_pio, reply_sm);
+  pio_sm_put(reply_pio, reply_sm, x);
+}
+
 static void __not_in_flash_func(irq_handler)() {
   // Clear first, so a frame pushed while draining raises the IRQ again
   pio_interrupt_clear(pio, 0);
   while (!pio_sm_is_rx_fifo_empty(pio, sm)) {
-    uint32_t raw = pio_sm_get(pio, sm);
+    uint16_t frame = ~pio_sm_get(pio, sm) & 0xFFFF;
+    if (answering) {
+      if (!(frame & spa::NO_BEEP)) {
+        answering = 0;  // the spa beeps, so the reply program has stopped by itself
+      } else if (frame == answering && ++replies >= MAX_REPLIES) {
+        answering = 0;
+        set_reply_x(NEVER);
+      }
+    }
     uint32_t h = head;
     uint32_t next = (h + 1) % RING_SIZE;
     if (next == tail) {
       dropped++;
       continue;
     }
-    ring[h] = ~raw & 0xFFFF;
+    ring[h] = frame;
     head = next;
   }
 }
@@ -87,9 +111,47 @@ static void start_bus() {
 
   pio_set_irq0_source_enabled(pio, pis_interrupt0, true);
   irq_set_exclusive_handler(PIO0_IRQ_0, irq_handler);
+  // Highest, since the handler enforces MAX_REPLIES
+  irq_set_priority(PIO0_IRQ_0, PICO_HIGHEST_IRQ_PRIORITY);
   irq_set_enabled(PIO0_IRQ_0, true);
   pio_sm_init(pio, sm, offset, &c);
   pio_sm_set_enabled(pio, sm, true);
+}
+
+// Call after start_bus(), which gives DATA to pio0
+static void start_reply() {
+  uint offset = pio_add_program(reply_pio, &reply_program);
+  reply_sm = pio_claim_unused_sm(reply_pio, true);
+  pio_sm_config c = reply_program_get_default_config(offset);
+  sm_config_set_in_pins(&c, DATA_PIN);
+  sm_config_set_set_pins(&c, DATA_PIN, 1);
+  sm_config_set_in_shift(&c, false, false, 32);
+  sm_config_set_out_shift(&c, true, false, 32);  // right, so `out` takes bit 0 first
+  sm_config_set_clkdiv(&c, clock_get_hz(clk_sys) / 32e6f);
+  pio_sm_init(reply_pio, reply_sm, offset, &c);
+  // Level 0 and input before DATA is handed over; nothing sets the level again
+  pio_sm_set_pins_with_mask(reply_pio, reply_sm, 0, 1u << DATA_PIN);
+  pio_sm_set_pindirs_with_mask(reply_pio, reply_sm, 0, 1u << DATA_PIN);
+  // X resets to 0, the frame that DATA stuck low gives
+  pio_sm_exec(reply_pio, reply_sm, pio_encode_mov_not(pio_x, pio_null));
+  pio_gpio_init(reply_pio, DATA_PIN);  // DATA's output now comes from pio1; pio0 still reads it
+  pio_sm_set_enabled(reply_pio, reply_sm, true);
+}
+
+static void start_pressing(spa::Button b) {
+  uint16_t poll = uint16_t(b);
+  uint32_t save = save_and_disable_interrupts();
+  answering = poll;
+  replies = 0;
+  set_reply_x(~poll & 0xFFFF);  // the program compares raw bus bits
+  restore_interrupts(save);
+}
+
+static void stop_pressing() {
+  uint32_t save = save_and_disable_interrupts();
+  answering = 0;
+  set_reply_x(NEVER);
+  restore_interrupts(save);
 }
 
 static spa::Decoder decoder;
@@ -154,7 +216,6 @@ static std::string lights(uint16_t leds) {
 static void log_changes(uint32_t now) {
   static uint16_t leds = 0;
   static std::string error;
-  static std::optional<spa::Button> held;
   static uint32_t beeps = 0;
   static std::string display;
   static uint32_t display_at = 0;
@@ -182,14 +243,27 @@ static void log_changes(uint32_t now) {
     error = decoder.error();
     log(error.empty() ? "error cleared" : "error " + error);
   }
-  if (controller.held() != held) {
-    held = controller.held();
-    if (held && READ_ONLY)
-      log(std::string("would press ") + spa::button_name(*held) + " (read-only build)");
-  }
   std::string result;
   while (controller.take_result(result))
     log(result);
+}
+
+// Makes the reply program follow controller.held()
+static void drive_presses() {
+  static std::optional<spa::Button> pressing;
+  auto held = controller.held();
+  if (held == pressing)
+    return;
+  if (pressing) {
+    uint32_t n = replies;
+    stop_pressing();
+    log(std::string("let go of ") + spa::button_name(*pressing) + ", " + std::to_string(n) + " polls answered");
+  }
+  pressing = held;
+  if (held) {
+    start_pressing(*held);
+    log(std::string("pressing ") + spa::button_name(*held));
+  }
 }
 
 static void run_schedule() {
@@ -245,7 +319,6 @@ static std::string status_json() {
   s += ",\"error\":\"" + decoder.error() + "\"";
   s += ",\"job\":\"" + (job ? spa::describe(*job) : "") + "\"";
   s += ",\"waiting\":" + std::to_string(controller.waiting());
-  s += std::string(",\"read_only\":") + json_bool(READ_ONLY);
   s += ",\"frames\":" + std::to_string(frames);
   s += ",\"dropped\":" + std::to_string(dropped + stalls);
   s += ",\"rssi\":" + std::to_string(WiFi.RSSI());
@@ -291,6 +364,9 @@ static void handle_set() {
 static void handle_save_schedule() {
   if (!authorized())
     return;
+  // Writing flash masks interrupts, which pauses the MAX_REPLIES limit
+  if (controller.held())
+    return reply(503, "busy pressing a button, try again");
   std::string text = server.arg("plain").c_str();
   std::vector<spa::Entry> entries;
   std::string error = spa::parse_schedule(text, entries);
@@ -366,13 +442,16 @@ static void check_wifi(uint32_t now) {
   }
   if (services_started) {
     server.handleClient();
-    ArduinoOTA.handle();
+    // An update writes flash, which masks interrupts and so pauses the MAX_REPLIES limit
+    if (!controller.held())
+      ArduinoOTA.handle();
   }
 }
 
 void setup() {
   Serial.begin(115200);
   start_bus();
+  start_reply();
   setenv("TZ", TIMEZONE, 1);
   tzset();
   // The core restarts SNTP whenever WiFi connects; lwIP looks these names up itself and keeps
@@ -403,6 +482,16 @@ void loop() {
     frames++;
   }
   tail = t;
+  // After a stall, or when a full ring dropped the newest frames, what was just decoded may be
+  // seconds old
+  static uint32_t last_dropped = 0;
+  static uint32_t last_loop = 0;
+  if (dropped != last_dropped || now - last_loop > 500) {
+    last_dropped = dropped;
+    controller.lost_data();
+    log("fell behind reading the bus");
+  }
+  last_loop = now;
   uint32_t rxstall = 1u << (PIO_FDEBUG_RXSTALL_LSB + sm);
   if (pio->fdebug & rxstall) {
     pio->fdebug = rxstall;
@@ -414,6 +503,7 @@ void loop() {
   }
 
   controller.update(now);
+  drive_presses();
   log_changes(now);
   run_schedule();
   check_wifi(now);

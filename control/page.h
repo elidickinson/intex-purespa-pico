@@ -64,8 +64,7 @@ async function refresh() {
     ['Doing', s.job ? s.job + (s.waiting ? ' (' + s.waiting + ' more waiting)' : '') : 'nothing'],
   ];
   st.innerHTML = rows.map(([k, v]) => '<tr><td>' + k + '<td>' + v).join('');
-  warn.textContent = (s.bus ? '' : 'No data from the spa bus. ') +
-    (s.read_only ? 'Read-only build: presses are logged, not sent to the spa.' : '');
+  warn.textContent = s.bus ? '' : 'No data from the spa bus.';
   for (const k of ['power', 'heater', 'bubbles'])
     document.getElementById('b-' + k).textContent = k[0].toUpperCase() + k.slice(1) + ': turn ' + (s[k] ? 'off' : 'on');
   lg.textContent = await (await fetch('/log')).text();

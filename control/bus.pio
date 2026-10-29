@@ -1,7 +1,8 @@
-; Receives bus frames. No instruction writes pins or pindirs and no set, out or side-set pins are
-; configured, so this program cannot drive the bus.
-; Pins are relative to the IN base (DATA): pin 1 = CLOCK, pin 2 = HOLD. Runs at 32 MHz.
+; Bus programs. Pins are relative to the IN base (DATA): pin 1 = CLOCK, pin 2 = HOLD. Both run at
+; 32 MHz (31.25 ns per cycle).
 
+; Receives frames. No instruction writes pins or pindirs and no set, out or side-set pins are
+; configured, so this program cannot drive the bus.
 ; Pushes the 16 raw DATA bits of each frame and raises IRQ 0. Waits for the HOLD strobe and its
 ; fall before every frame, so it realigns after any missed frame.
 .program frames
@@ -16,4 +17,45 @@ bit:
     jmp y-- bit
     push block
     irq set 0
+.wrap
+
+; Presses a button the way the panel does: answers a poll equal to X by pulling DATA low from
+; 2.4 us after HOLD rises (about 4 us after the 16th CLOCK rise), for 10 us. Timing from the rise
+; keeps it in place when the main board stretches the strobe. The set pin is DATA and its output
+; level is always 0, so the program can only pull DATA low or let it go, never drive it high.
+; C loads X through the TX FIFO, one value per frame; 0xFFFFFFFF never matches a 16-bit frame.
+; Any frame with the beep bit (raw bit 8 set) sets X to 0xFFFFFFFF and discards a value waiting
+; in the FIFO: the beep means the spa took a press, and answering after it would press twice.
+.program reply
+.wrap_target
+top:
+    wait 1 pin 2
+    wait 0 pin 2            ; HOLD strobe over: a frame starts
+frame:
+    pull noblock            ; a new X from C, or X again if there is none
+    mov x, osr
+    set y, 15
+bit:
+    wait 0 pin 1
+    wait 1 pin 1
+    in pins, 1
+    jmp y-- bit
+    mov y, isr
+    mov isr, null
+    jmp x!=y not_held
+    wait 1 pin 2 [31]       ; HOLD rises ~1.7 us after the 16th CLOCK rise; 1 us
+    set y, 31 [31]          ; 1 us more
+    nop [12]                ; 0.4 us more
+    set pindirs, 1          ; DATA low
+hold:
+    jmp y-- hold [9]        ; 32 x 10 cycles = 10 us
+    set pindirs, 0          ; let DATA go
+    jmp frame               ; the strobe is over (it lasts 5 us at most); the next frame is next
+not_held:
+    mov osr, y              ; raw bit 8 is the beep bit, set while the spa beeps
+    out null, 8
+    out y, 1
+    jmp !y top
+    mov x, ~null
+    pull noblock            ; drop a value C wrote during this frame
 .wrap

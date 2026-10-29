@@ -135,10 +135,11 @@ std::string describe(const Request &r);
 /**
  * Carries out requests one at a time by holding buttons, checking every step against the display
  * and LEDs. A request waits for the panel to settle first, so a menu opened there can't change the
- * state afterwards. A press holds the
- * button until the panel beeps or PRESS_MS passes, then waits for the beep to end. Unacknowledged
- * presses are retried; acknowledged ones never are, since repeating a toggle would undo it. Never
- * presses anything except for a request. Never blocks: call update() regularly with the time in ms.
+ * state afterwards, and fails if no display has arrived for BUS_MS. A press holds the button until
+ * the panel beeps or PRESS_MS passes, then waits for the beep to end. After a press without a
+ * beep or a new menu value the request starts over, checking the state again; a toggle is never
+ * pressed twice without that check, since the second press would undo the first. Never presses anything except
+ * for a request. Never blocks: call update() regularly with the time in ms.
  *
  * salt=N while salt runs sets a new N-hour run starting now, as the manual describes.
  */
@@ -150,6 +151,8 @@ class Controller {
   static constexpr uint32_t VALUE_WAIT_MS = 2000;
   static constexpr uint32_t MENU_CLOSE_MS = 20000;
   static constexpr uint32_t JOB_MS = 120000;
+  static constexpr uint32_t BUS_MS = 1000;
+  static constexpr uint32_t FRESH_DISPLAYS = 100;  // ~1.2 s
   static constexpr int MAX_UNACKED = 3;
   static constexpr int MAX_SALT_PRESSES = 6;
   static constexpr int MAX_TEMP_PRESSES = 60;
@@ -159,6 +162,9 @@ class Controller {
 
   bool queue(const Request &r);  // false if the queue is full
   void update(uint32_t now);
+  // Frames were dropped, so the decoded state may be stale: fails the current request, and the
+  // next one waits for FRESH_DISPLAYS new displays
+  void lost_data();
 
   std::optional<Button> held() const { return held_; }
   const std::optional<Request> &current() const { return job_; }
@@ -185,11 +191,13 @@ class Controller {
   Step step_ = Step::START;
   uint32_t step_at_ = 0;
   std::optional<Button> held_;
-  Button button_ = Button::POWER;
   uint32_t beeps_before_ = 0;
   int presses_ = 0;
   int unacked_ = 0;
   uint32_t seq_ = 0;
+  uint32_t displays_seen_ = 0;
+  uint32_t bus_at_ = 0;
+  uint32_t fresh_after_ = 0;
 };
 
 }  // namespace spa
