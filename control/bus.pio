@@ -1,0 +1,19 @@
+; Receives bus frames. No instruction writes pins or pindirs and no set, out or side-set pins are
+; configured, so this program cannot drive the bus.
+; Pins are relative to the IN base (DATA): pin 1 = CLOCK, pin 2 = HOLD. Runs at 32 MHz.
+
+; Pushes the 16 raw DATA bits of each frame and raises IRQ 0. Waits for the HOLD strobe and its
+; fall before every frame, so it realigns after any missed frame.
+.program frames
+.wrap_target
+    wait 1 pin 2
+    wait 0 pin 2            ; HOLD low: a frame starts
+    set y, 15
+bit:
+    wait 0 pin 1
+    wait 1 pin 1            ; CLOCK rising: DATA is valid
+    in pins, 1
+    jmp y-- bit
+    push block
+    irq set 0
+.wrap

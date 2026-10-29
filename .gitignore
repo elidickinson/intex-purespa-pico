@@ -6,8 +6,10 @@
 **/__pycache__/
 .pio/
 capture/wifi.env
+control/wifi.env
 /.vscode/
 /spa-env/
 
 # host tests
 tests/test_protocol
+control/tests/test_control
