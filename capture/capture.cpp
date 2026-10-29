@@ -1,30 +1,33 @@
 // Read-only PureSpa bus capture for the Pico W.
 //
-// Watches the panel bus and logs every raw 16-bit frame with microsecond
-// timestamps to the USB serial console and as batched UDP packets.
+// Watches the panel bus and logs every raw 16-bit frame with a microsecond
+// timestamp to the USB serial console and as batched UDP packets:
+// "<us> <frame>". Button-poll frames also get the six words of DATA, CLOCK and
+// HOLD samples taken after them (see the sampler in capture.pio), where the
+// panel answers a pressed button. A status line every 5 s adds WiFi signal,
+// chip temperature and the range of HOLD high and low times since the
+// previous status line.
 //
-// Passivity: the PIO program's match register X is armed with `mov x, ~null`
-// (0xFFFFFFFF, which can never equal a 16-bit frame) while the state machine
-// is still halted, and sm_config_set_set_pins() is not called, so the
-// program's `set pindirs, 1` can never reach a pin: DATA is never driven and
-// the panel and base behave exactly as if the Pico were not on the bus.
+// Passivity: capture.pio has no instruction that writes pins or pindirs, and
+// no set, out or side-set pins are configured, so DATA is never driven and the
+// panel and base behave exactly as if the Pico were not on the bus.
 //
 // Logging over WiFi is the safe path: a USB cable would tie the laptop ground
 // to the spa ground (and feed USB 5 V into the spa rail). If you must use
 // serial, unplug the laptop charger and expect Serial.write to block for up
 // to 1 s per call when the host is connected but not reading.
 //
-// Build: pioasm sbh20.pio sbh20.pio.h, then compile with the arduino-pico core
-// (PlatformIO: platform = raspberrypi, board = pico_w, framework = arduino).
+// Build: see platformio.ini; the build runs pioasm on capture.pio.
 // Pins (repo build-plan.md): GP3 = DATA, GP4 = CLOCK, GP5 = HOLD/LATCH.
 // The spa's panel 5 V feeds VSYS through a fuse; no USB power needed.
 
 #include <Arduino.h>
 #include <pico/time.h>
 
+#include "capture.pio.h"
+#include "hardware/clocks.h"
 #include "hardware/irq.h"
 #include "hardware/pio.h"
-#include "sbh20.pio.h"
 
 #include <WiFi.h>
 #include <WiFiUdp.h>
@@ -35,7 +38,9 @@
 #ifndef WIFI_PASS
 #define WIFI_PASS "password"
 #endif
-// SET THIS to the computer running `nc -lu 1514`; unicast, not broadcast.
+// SET THIS to the computer running `python3 -I listen.py <log>`; unicast, not
+// broadcast. Avoid `nc -lu`: it locks onto the first sender and silently
+// ignores the Pico after a restart, which sends from a new port.
 // A wrong host fails silently and looks like a wiring fault, so the build
 // refuses to compile until this is set.
 #ifndef LOG_HOST
@@ -52,23 +57,66 @@ static const unsigned CS_PIN = 5;
 static const PIO pio = pio0;
 static uint offset;
 static uint sm;
+static uint sampler_offset;
+static uint sampler_sm;
+// pio0 has no room left for hold_timing
+static const PIO hold_pio = pio1;
+static uint hold_offset;
+static uint hold_sm;
+// HOLD high and low times since the last status line, in 62.5 ns steps
+static uint32_t high_min = UINT32_MAX;
+static uint32_t high_max = 0;
+static uint32_t low_min = UINT32_MAX;
+static uint32_t low_max = 0;
+
+static constexpr unsigned SAMPLE_WORDS = 6;
 
 struct Frame {
-  uint32_t t;      // time_us_32() at capture
-  uint16_t frame;  // decoded (inverted) frame
+  uint32_t t;                      // time_us_32() at capture
+  uint32_t samples[SAMPLE_WORDS];  // pins after the frame, see the sampler in capture.pio
+  uint16_t frame;                  // decoded (inverted) frame
 };
 
-// ~700 ms of bus traffic at ~1500 frames/s
-static constexpr uint32_t RING_SIZE = 1024;
+// ~1 s of bus traffic at ~2800 frames/s (spa off; ~2 s at ~1600 when on)
+static constexpr uint32_t RING_SIZE = 3072;
+
+// Button polls seen on SB-HS10-1, with the beep bit 0x0100 set
+static bool is_poll(uint16_t frame) {
+  switch (frame | 0x0100) {
+    case 0x0102: case 0x0108: case 0x0110: case 0x0140: case 0x0180:
+    case 0x0500: case 0x1100: case 0x2100: case 0x8100:
+      return true;
+  }
+  return false;
+}
 static Frame ring[RING_SIZE];
 static volatile uint32_t head = 0;
 static volatile uint32_t tail = 0;
 static volatile uint32_t dropped = 0;
 static volatile uint32_t zero_frames = 0;  // raw 0: DATA low all 16 clocks
 
+// Starts capture and sampler in step at their first instruction, so each frame
+// word pairs with the sampler's words for that frame.
+static void start_capture() {
+  uint32_t mask = (1u << sm) | (1u << sampler_sm);
+  pio_set_sm_mask_enabled(pio, mask, false);
+  pio_sm_clear_fifos(pio, sm);
+  pio_sm_clear_fifos(pio, sampler_sm);
+  pio_interrupt_clear(pio, 1);
+  pio_restart_sm_mask(pio, mask);
+  pio_sm_exec(pio, sm, pio_encode_jmp(offset));
+  pio_sm_exec(pio, sampler_sm, pio_encode_jmp(sampler_offset));
+  pio_set_sm_mask_enabled(pio, mask, true);
+}
+
 static void __not_in_flash_func(irq_handler)() {
-  while (!pio_sm_is_rx_fifo_empty(pio, sm)) {
+  // Clear first, so a frame pushed while draining raises the IRQ again.
+  pio_interrupt_clear(pio, 0);
+  while (!pio_sm_is_rx_fifo_empty(pio, sm) && pio_sm_get_rx_fifo_level(pio, sampler_sm) >= SAMPLE_WORDS) {
     uint32_t raw = pio_sm_get(pio, sm);
+    uint32_t s[SAMPLE_WORDS];
+    for (auto &w : s)
+      w = pio_sm_get(pio, sampler_sm);
     uint32_t h = head;
     uint32_t next = (h + 1) % RING_SIZE;
     if (next == tail) {
@@ -76,6 +124,7 @@ static void __not_in_flash_func(irq_handler)() {
       continue;
     }
     ring[h].t = time_us_32();
+    memcpy(ring[h].samples, s, sizeof(s));
     ring[h].frame = ~raw & 0xFFFF;
     // GOTCHA: raw 0 (DATA stuck low: floating pin, wrong pin, unpowered
     // shifter) is exactly the miswiring clue, so it is counted and logged,
@@ -84,12 +133,21 @@ static void __not_in_flash_func(irq_handler)() {
       zero_frames++;
     head = next;
   }
-  uint32_t rxstall = 1u << (PIO_FDEBUG_RXSTALL_LSB + sm);
+  // A push that stalled on a full FIFO may have missed the start of a frame or
+  // of the sampler, which would pair later frames with the wrong samples.
+  uint32_t rxstall = (1u << (PIO_FDEBUG_RXSTALL_LSB + sm)) | (1u << (PIO_FDEBUG_RXSTALL_LSB + sampler_sm));
   if (pio->fdebug & rxstall) {
     pio->fdebug = rxstall;
     dropped++;
+    start_capture();
   }
-  pio_interrupt_clear(pio, 0);
+}
+
+static void widen(uint32_t &lo, uint32_t &hi, uint32_t v) {
+  if (v < lo)
+    lo = v;
+  if (v > hi)
+    hi = v;
 }
 
 static WiFiUDP udp;
@@ -99,7 +157,7 @@ static uint32_t last_flush = 0;
 static uint32_t last_wifi_poll = 0;
 static bool wifi_ok = false;
 
-static char line[64];
+static char line[160];
 static char pkt[1200];
 static size_t pkt_len = 0;
 
@@ -113,35 +171,41 @@ static void send(const char *data, size_t len) {
   Serial.write(data, len);
   if (!wifi_ok)
     return;
-  // GOTCHA: at ~1500 frames/s a 200 ms flush window fills the 1200-byte packet
-  // about 4x over, so the buffer must flush on overflow, not only on the timer.
+  // GOTCHA: the bus fills the 1200-byte packet in well under 200 ms, so the
+  // buffer must flush on overflow, not only on the timer.
   if (pkt_len + len > sizeof(pkt))
     flush_udp(millis());
-  // Lines are bounded by line[64], so len always fits an empty packet.
+  // Lines are bounded by line[160], so len always fits an empty packet.
   memcpy(pkt + pkt_len, data, len);
   pkt_len += len;
 }
 
 static void flush_udp(uint32_t now) {
-  // Frames are batched into ~1 KB packets flushed every 200 ms (~5 packets/s).
-  // One packet per frame would be ~1500 packets/s of broadcast airtime, which
-  // the AP re-sends at basic rate and the radio cannot sustain.
+  // Lines are batched into packets sent when full or 200 ms after the last one.
+  // One packet per frame would be thousands of packets/s, which the radio
+  // cannot sustain.
   if (!wifi_ok || pkt_len == 0)
     return;
   udp.beginPacket(LOG_HOST, LOG_PORT);
   udp.write((const uint8_t *) pkt, pkt_len);
   udp.endPacket();
   pkt_len = 0;
-  (void) now;
+  last_flush = now;
 }
 
 static void report(uint32_t now) {
-  int n = snprintf(line, sizeof(line), "%10lu ms  %8lu frames  %3lu dropped  %4lu zero\n",
+  // HOLD steps are 62.5 ns: x125/2 for ns, /16 for us
+  int n = snprintf(line, sizeof(line),
+                   "%10lu ms  %8lu frames  %3lu dropped  %4lu zero  %4d dBm  %3ld C  "
+                   "HOLD high %lu-%lu ns  low %lu-%lu us\n",
                    (unsigned long) millis(), (unsigned long) frames, (unsigned long) dropped,
-                   (unsigned long) zero_frames);
+                   (unsigned long) zero_frames, (int) WiFi.RSSI(), lround(analogReadTemp()),
+                   (unsigned long) (high_max ? high_min * 125 / 2 : 0), (unsigned long) (high_max * 125 / 2),
+                   (unsigned long) (low_max ? low_min / 16 : 0), (unsigned long) (low_max / 16));
+  high_min = low_min = UINT32_MAX;
+  high_max = low_max = 0;
   send(line, n);
   flush_udp(now);
-  last_flush = now;
 }
 
 static bool wifi_up(uint32_t now) {
@@ -156,46 +220,57 @@ static bool wifi_up(uint32_t now) {
 void setup() {
   Serial.begin(115200);
 
-  offset = pio_add_program(pio, &sbh20_program);
+  offset = pio_add_program(pio, &capture_program);
   sm = pio_claim_unused_sm(pio, true);
+  sampler_offset = pio_add_program(pio, &sampler_program);
+  sampler_sm = pio_claim_unused_sm(pio, true);
+  hold_offset = pio_add_program(hold_pio, &hold_timing_program);
+  hold_sm = pio_claim_unused_sm(hold_pio, true);
+  float clkdiv = clock_get_hz(clk_sys) / 32e6f;  // capture.pio timing assumes 32 MHz
 
-  pio_sm_config c = sbh20_program_get_default_config(offset);
+  // RX-only: the FIFO joins are safe here because nothing ever writes TX.
+  // GOTCHA (from the production component): joining RX disables TX, whose
+  // status then reads permanently full - any pio_sm_put_blocking() would hang
+  // forever. If this sketch ever needs TX, remove the join first.
+  pio_sm_config c = capture_program_get_default_config(offset);
   sm_config_set_in_pins(&c, DATA_PIN);
-  sm_config_set_in_shift(&c, false, false, 16);
-  sm_config_set_out_shift(&c, true, false, 16);
-  // No sm_config_set_set_pins(): the default set-pin count is 0, so the
-  // program's `set pindirs, 1` can never switch DATA to output. This is the
-  // strongest passivity guarantee here; keep it if the program is updated.
+  sm_config_set_in_shift(&c, false, false, 32);
+  sm_config_set_fifo_join(&c, PIO_FIFO_JOIN_RX);
+  sm_config_set_clkdiv(&c, clkdiv);
+
+  pio_sm_config s = sampler_program_get_default_config(sampler_offset);
+  sm_config_set_in_pins(&s, DATA_PIN);
+  sm_config_set_in_shift(&s, false, true, 30);
+  sm_config_set_fifo_join(&s, PIO_FIFO_JOIN_RX);
+  sm_config_set_clkdiv(&s, clkdiv);
+
+  pio_sm_config h = hold_timing_program_get_default_config(hold_offset);
+  sm_config_set_in_pins(&h, DATA_PIN);
+  sm_config_set_jmp_pin(&h, CS_PIN);
+  sm_config_set_fifo_join(&h, PIO_FIFO_JOIN_RX);
+  sm_config_set_clkdiv(&h, clkdiv);
 
   // Direction first: once the pads belong to PIO, their output enable must
-  // already read input - the only window where this file could drive a pin.
+  // already read input.
   pio_sm_set_consecutive_pindirs(pio, sm, DATA_PIN, 3, false);
   pio_gpio_init(pio, DATA_PIN);
   pio_gpio_init(pio, CLK_PIN);
   pio_gpio_init(pio, CS_PIN);
 
-  // RX-only: the FIFO join is safe here because nothing ever writes TX.
-  // GOTCHA (from the production component): joining RX disables TX, whose
-  // status then reads permanently full - any pio_sm_put_blocking() would hang
-  // forever. If this sketch ever needs TX, remove the join first.
-  sm_config_set_fifo_join(&c, PIO_FIFO_JOIN_RX);
-  pio_sm_clear_fifos(pio, sm);
   pio_set_irq0_source_enabled(pio, pis_interrupt0, true);
   irq_set_exclusive_handler(PIO0_IRQ_0, irq_handler);
   irq_set_enabled(PIO0_IRQ_0, true);
 
   pio_sm_init(pio, sm, offset, &c);
-  // Arm X while the SM is halted: X = ~null = 0xFFFFFFFF, which no 16-bit
-  // frame equals, so the reply block never runs and DATA stays an input.
-  // GOTCHA: X's reset value is 0 and a raw 0 (DATA low all 16 clocks, e.g.
-  // miswired or floating DATA) would match it; SM restart does NOT clear X.
-  pio_sm_exec(pio, sm, pio_encode_mov_not(pio_x, pio_null));
-  pio_sm_set_enabled(pio, sm, true);
+  pio_sm_init(pio, sampler_sm, sampler_offset, &s);
+  pio_sm_init(hold_pio, hold_sm, hold_offset, &h);
+  start_capture();
+  pio_sm_set_enabled(hold_pio, hold_sm, true);
 
   WiFi.mode(WIFI_STA);
   WiFi.begin(WIFI_SSID, WIFI_PASS);
 
-  Serial.print("\ncapture: X=0xffffffff, set-pins=0, DATA is never driven\n");
+  Serial.print("\ncapture: listen-only, DATA is never driven\n");
 }
 
 void loop() {
@@ -206,11 +281,26 @@ void loop() {
   uint32_t now = millis();
   wifi_up(now);
 
+  // Only ranges are reported and each word says whether it is a high or a low
+  // time, so overflowing this FIFO between loops is harmless
+  while (!pio_sm_is_rx_fifo_empty(hold_pio, hold_sm)) {
+    uint32_t w = pio_sm_get(hold_pio, hold_sm);
+    if (w >> 31)
+      widen(high_min, high_max, ~w);
+    else
+      widen(low_min, low_max, w);
+  }
+
   uint32_t t = tail;
   while (t != head) {
     const Frame &f = ring[t];
     tail = (t + 1) % RING_SIZE;
-    int n = snprintf(line, sizeof(line), "%10lu %04x\n", (unsigned long) f.t, f.frame);
+    int n = snprintf(line, sizeof(line), "%10lu %04x", (unsigned long) f.t, f.frame);
+    if (is_poll(f.frame)) {
+      for (uint32_t w : f.samples)
+        n += snprintf(line + n, sizeof(line) - n, " %08lx", (unsigned long) w);
+    }
+    line[n++] = '\n';
     send(line, n);
     frames++;
     t = tail;

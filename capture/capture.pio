@@ -1,0 +1,60 @@
+; Listen-only bus capture. No instruction writes pins or pindirs and no set, out or
+; side-set pins are configured, so none of these programs can drive the bus.
+; Pins are relative to the IN base (DATA): pin 1 = CLOCK, pin 2 = HOLD.
+; All programs run at 32 MHz (31.25 ns per cycle).
+
+; Pushes the 16 raw DATA bits of each frame and starts the sampler right after the
+; 16th CLOCK rise. Waits for the HOLD strobe and its fall before every frame, which
+; keeps it aligned to frames.
+.program capture
+.wrap_target
+    wait 1 pin 2
+    wait 0 pin 2            ; HOLD low: a frame starts
+    set y, 15
+bit:
+    wait 0 pin 1
+    wait 1 pin 1            ; CLOCK rising: DATA is valid
+    in pins, 1
+    jmp y-- bit
+    irq set 1               ; start the sampler
+    push block
+.wrap
+
+; Samples DATA, CLOCK and HOLD (3 bits, DATA lowest) every 0.5 us for 30 us, starting
+; ~0.2 us after a frame's 16th CLOCK rise. Autopush at 30 bits pushes exactly six
+; words per frame, 10 samples each, oldest in the top bits. The sampling is spaced
+; 0.5 us apart except one extra 62.5 ns step after the 30th sample.
+.program sampler
+.wrap_target
+    wait 1 irq 1
+    set x, 1
+half:
+    set y, 29
+sample:
+    in pins, 3 [14]         ; 16 cycles per sample with the jmp
+    jmp y-- sample
+    jmp x-- half
+    irq set 0
+.wrap
+
+; jmp_pin = HOLD. Pushes how long HOLD stays high and then low, in 2-cycle (62.5 ns)
+; steps: a high time inverted (top bit set), a low time as is.
+.program hold_timing
+    wait 0 pin 2
+    wait 1 pin 2
+.wrap_target
+    mov x, ~null
+high:
+    jmp x-- still
+still:
+    jmp pin, high
+    mov isr, x
+    push noblock
+    mov x, ~null
+low:
+    jmp pin, ended
+    jmp x-- low
+ended:
+    mov isr, ~x
+    push noblock
+.wrap

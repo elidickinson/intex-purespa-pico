@@ -4,7 +4,8 @@
 /.esphome/
 /secrets.yaml
 **/__pycache__/
-/.pio/
+.pio/
+capture/wifi.env
 /.vscode/
 /spa-env/
 
