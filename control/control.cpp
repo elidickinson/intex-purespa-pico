@@ -110,7 +110,7 @@ static bool local_time(tm &out) {
   return true;
 }
 
-static constexpr int LOG_LINES = 60;
+static constexpr int LOG_LINES = 200;
 static std::string log_lines[LOG_LINES];
 static int log_next = 0;
 
@@ -151,10 +151,29 @@ static std::string lights(uint16_t leds) {
 }
 
 // Logs changes, so the log can be compared with what the panel showed
-static void log_changes() {
+static void log_changes(uint32_t now) {
   static uint16_t leds = 0;
   static std::string error;
   static std::optional<spa::Button> held;
+  static uint32_t beeps = 0;
+  static std::string display;
+  static uint32_t display_at = 0;
+  static std::optional<int> target;
+  if (decoder.beeps() != beeps) {
+    beeps = decoder.beeps();
+    log("beep");
+  }
+  // Every display change while the panel is in use, to show how its menus behave
+  if (decoder.display() != display) {
+    if (!decoder.settled())
+      log("display '" + decoder.display() + "', '" + display + "' lasted " + std::to_string(now - display_at) + " ms");
+    display = decoder.display();
+    display_at = now;
+  }
+  if (decoder.target() != target) {
+    target = decoder.target();
+    log("target " + std::to_string(*target) + decoder.unit());
+  }
   if (decoder.leds() != leds) {
     leds = decoder.leds();
     log(lights(leds));
@@ -395,7 +414,7 @@ void loop() {
   }
 
   controller.update(now);
-  log_changes();
+  log_changes(now);
   run_schedule();
   check_wifi(now);
 }
