@@ -375,6 +375,15 @@ static void test_waits_for_a_menu_opened_on_the_panel() {
   CHECK(!rig.spa.salt_on);
 }
 
+// Pressing Salt inside an open salt menu would step it to the next duration
+static void test_test_press_waits_for_a_menu_on_the_panel() {
+  Rig rig = powered_on();
+  rig.spa.press(Button::SALT);  // someone opens the salt menu, showing 3H
+  CHECK_EQ(rig.request("press", "salt"), "press=salt: done, the spa beeped");
+  rig.run_ms(15000);
+  CHECK_EQ(rig.spa.salt_left, 3);
+}
+
 static void test_salt_while_running_sets_a_new_duration() {
   Rig rig = powered_on();
   rig.spa.salt_on = true;
@@ -483,6 +492,7 @@ int main() {
   test_dropped_frames_fail_the_request_and_wait_for_fresh_data();
   test_no_bus_data_fails_without_pressing();
   test_waits_for_a_menu_opened_on_the_panel();
+  test_test_press_waits_for_a_menu_on_the_panel();
   test_salt_while_running_sets_a_new_duration();
   test_quickly_changed_value_is_not_water();
   test_temperature_menu_is_read();

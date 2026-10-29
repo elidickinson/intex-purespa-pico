@@ -304,14 +304,14 @@ void Controller::update(uint32_t now) {
 
 void Controller::run(uint32_t now) {
   const Request &r = *job_;
-  if (step_ == Step::START && r.kind != Request::PRESS) {
+  if (step_ == Step::START) {
     // A menu someone opened on the panel may still change the state; let it close first
     if (!d_.settled() || d_.displays() < fresh_after_) {
       if (now - step_at_ >= MENU_CLOSE_MS)
         finish("failed: a menu on the panel kept flashing");
       return;
     }
-    if (r.kind != Request::POWER && !d_.on(led::POWER)) {
+    if (r.kind != Request::POWER && r.kind != Request::PRESS && !d_.on(led::POWER)) {
       finish("failed: the spa is off");
       return;
     }

@@ -267,12 +267,13 @@ static void drive_presses() {
 }
 
 static void run_schedule() {
-  static int last_minute = -1;
+  static long last_minute = -1;
   tm t;
   if (!local_time(t))
     return;
-  int minute = t.tm_hour * 60 + t.tm_min;
-  if (minute == last_minute)
+  // Local minutes only ever count up, so the hour repeated when daylight saving ends runs once
+  long minute = ((t.tm_year * 366L + t.tm_yday) * 24 + t.tm_hour) * 60 + t.tm_min;
+  if (minute <= last_minute)
     return;
   last_minute = minute;
   for (const auto &entry : schedule) {
@@ -367,6 +368,9 @@ static void handle_save_schedule() {
   // Writing flash masks interrupts, which pauses the MAX_REPLIES limit
   if (controller.held())
     return reply(503, "busy pressing a button, try again");
+  // A form-encoded body arrives as arguments, not as "plain", and would save as empty
+  if (!server.hasArg("plain") && server.args() > 0)
+    return reply(400, "send the schedule as plain text: curl -H 'Content-Type: text/plain' --data-binary @file");
   std::string text = server.arg("plain").c_str();
   std::vector<spa::Entry> entries;
   std::string error = spa::parse_schedule(text, entries);
