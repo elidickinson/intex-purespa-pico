@@ -1,7 +1,8 @@
 #pragma once
 
 // The web page; it reads /status every 2 s (and /log while Details is open) and sends requests to
-// /set and /schedule.
+// /set and /schedule. It asks for the password once, keeps it in the browser's local storage and
+// sends it as basic auth with every call.
 static const char PAGE[] = R"html(<!doctype html>
 <html><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1">
 <meta name=color-scheme content="light dark">
@@ -22,6 +23,12 @@ textarea{width:100%;box-sizing:border-box;font:.9em ui-monospace,monospace}
 pre{white-space:pre-wrap;font-size:.8em}
 </style></head><body>
 <h1>Spa</h1>
+<form id=login hidden onsubmit="return signin()">
+<input name=username autocomplete=username value=spa hidden>
+<input id=pw type=password autocomplete=current-password placeholder=Password> <button>Log in</button>
+<p id=loginmsg class=warn></p>
+</form>
+<div id=main hidden>
 <p id=info class=dim></p>
 <p id=warn class=warn></p>
 <table>
@@ -49,19 +56,47 @@ or a list such as mon,wed,fri. # starts a comment.<br>
 <button onclick="send('press=' + btn.value)">Press</button></p>
 <pre id=lg></pre>
 </details>
+</div>
 <script>
 let s = {};
 let shown;
+let pass = localStorage.getItem('pass');
+async function api(url, opts = {}) {
+  const r = await fetch(url, {...opts, headers: {Authorization: 'Basic ' + btoa('spa:' + pass)}});
+  if (r.status == 401) {
+    loginmsg.textContent = pass ? 'Wrong password.' : '';
+    localStorage.removeItem('pass');
+    pass = null;
+    main.hidden = true;
+    login.hidden = false;
+    throw new Error('password required');
+  }
+  return r;
+}
+function signin() {
+  pass = pw.value;
+  localStorage.setItem('pass', pass);
+  start();
+  return false;
+}
+function start() {
+  login.hidden = true;
+  main.hidden = false;
+  api('/schedule').then(r => r.text()).then(t => sched.value = t);
+  refresh();
+}
 async function send(q) {
-  msg.textContent = (await (await fetch('/set?' + q, {method: 'POST'})).text()).trim();
+  msg.textContent = (await (await api('/set?' + q, {method: 'POST'})).text()).trim();
   refresh();
 }
 function toggle(k) { send(k + '=' + (s[k] ? 'off' : 'on')); }
 async function save() {
-  smsg.textContent = (await (await fetch('/schedule', {method: 'POST', body: sched.value})).text()).trim();
+  smsg.textContent = (await (await api('/schedule', {method: 'POST', body: sched.value})).text()).trim();
 }
 async function refresh() {
-  s = await (await fetch('/status')).json();
+  if (!pass)
+    return;
+  s = await (await api('/status')).json();
   const deg = v => v == null ? 'not known yet' : v + '°' + s.unit;
   const on = b => b ? 'on' : 'off';
   const left = s.hours_left == null ? '' : ', ' + s.hours_left + ' h left';
@@ -89,11 +124,13 @@ async function refresh() {
   shown = s.results;
   if (more.open) {
     disp.textContent = 'Display "' + s.display + '"';
-    lg.textContent = await (await fetch('/log')).text();
+    lg.textContent = await (await api('/log')).text();
   }
 }
-fetch('/schedule').then(r => r.text()).then(t => sched.value = t);
-refresh();
+if (pass)
+  start();
+else
+  login.hidden = false;
 setInterval(refresh, 2000);
 </script>
 </body></html>

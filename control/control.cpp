@@ -10,7 +10,8 @@
 // Pins (hottub build-plan.md): GP3 = DATA, GP4 = CLOCK, GP5 = HOLD. The spa's panel 5 V feeds
 // VSYS; never connect USB while attached to the spa.
 //
-// HTTP API, all with basic auth (user spa, password WEB_PASS):
+// HTTP API, all with basic auth (user spa, password WEB_PASS). The page at / needs none: it asks
+// for the password itself and sends it with each call.
 //   GET  /status           JSON spa state
 //   POST /set?heater=on    queue requests: power, heater, bubbles = on|off; temp = degrees as
 //                          shown; salt = off|3|5|8; press = a button name (test only)
@@ -336,10 +337,12 @@ static std::string status_json() {
   return s + "}";
 }
 
+// No WWW-Authenticate header on failure, so browsers show the page's own password box instead of
+// their basic auth prompt
 static bool authorized() {
   if (server.authenticate("spa", WEB_PASS))
     return true;
-  server.requestAuthentication();
+  server.send(401, "text/plain", "password required\n");
   return false;
 }
 
@@ -410,10 +413,7 @@ static void handle_log() {
 }
 
 static void setup_server() {
-  server.on("/", HTTP_GET, [] {
-    if (authorized())
-      server.send(200, "text/html", PAGE);
-  });
+  server.on("/", HTTP_GET, [] { server.send(200, "text/html", PAGE); });
   server.on("/status", HTTP_GET, [] {
     if (authorized())
       server.send(200, "application/json", status_json().c_str());

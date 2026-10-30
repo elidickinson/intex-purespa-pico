@@ -42,7 +42,7 @@ Needs [uv](https://docs.astral.sh/uv/) (PlatformIO runs through `uvx`) and a C++
 
 ## Use
 
-Open `http://spa.local/` (user `spa`, password `WEB_PASS`), or use the same settings from any computer, for example from cron:
+Open `http://spa.local/` and enter `WEB_PASS`; the browser remembers it. Or use the same settings from any computer with basic auth (user `spa`), for example from cron:
 
 ```sh
 curl -u spa:PASSWORD http://spa.local/status
