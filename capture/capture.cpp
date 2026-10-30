@@ -32,20 +32,13 @@
 #include <WiFi.h>
 #include <WiFiUdp.h>
 
-#ifndef WIFI_SSID
-#define WIFI_SSID "net"
-#endif
-#ifndef WIFI_PASS
-#define WIFI_PASS "password"
-#endif
-// SET THIS to the computer running `python3 -I listen.py <log>`; unicast, not
+// LOG_HOST is the computer running `python3 -I listen.py <log>`; unicast, not
 // broadcast. Avoid `nc -lu`: it locks onto the first sender and silently
 // ignores the Pico after a restart, which sends from a new port.
 // A wrong host fails silently and looks like a wiring fault, so the build
-// refuses to compile until this is set.
-#ifndef LOG_HOST
-#error "Set LOG_HOST to your computer's IP, e.g. -DLOG_HOST=\"192.168.1.100\""
-#endif
+// refuses to compile until it is set.
+static_assert(sizeof(WIFI_SSID) > 1 && sizeof(WIFI_PASS) > 1 && sizeof(LOG_HOST) > 1,
+              "run `source wifi.env` before building; see platformio.ini");
 #ifndef LOG_PORT
 #define LOG_PORT 1514
 #endif

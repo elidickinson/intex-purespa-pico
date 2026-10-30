@@ -30,15 +30,15 @@ Wire numbers follow [jnsbyr's schematic](https://github.com/jnsbyr/esp8266-intex
 
 Needs [uv](https://docs.astral.sh/uv/) (PlatformIO runs through `uvx`) and a C++ compiler for the tests.
 
-1. Create `control/wifi.env` (gitignored). `WEB_PASS` protects the page and updates. The Pico W only joins 2.4 GHz networks.
+1. Create `control/wifi.env` (gitignored). The Pico W only joins 2.4 GHz networks. `WEB_PASS` protects the page and updates. `TIMEZONE` is a POSIX TZ string; this one is New York.
    ```sh
    export WIFI_SSID=...
    export WIFI_PASS=...
    export WEB_PASS=...
+   export TIMEZONE=EST5EDT,M3.2.0,M11.1.0
    ```
-2. Set `TIMEZONE` in `control/control.cpp` (a POSIX TZ string; the default is New York).
-3. First flash, with the Pico off the spa: hold BOOTSEL while plugging in USB, then run `control/flash-usb.sh`.
-4. After that, update over WiFi with `control/update.sh`.
+2. First flash, with the Pico off the spa: hold BOOTSEL while plugging in USB, then run `control/flash-usb.sh`.
+3. After that, update over WiFi with `control/update.sh`.
 
 ## Use
 

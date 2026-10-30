@@ -36,11 +36,10 @@
 #include "schedule.h"
 #include "spa.h"
 
-static_assert(sizeof(WIFI_SSID) > 1 && sizeof(WIFI_PASS) > 1 && sizeof(WEB_PASS) > 1,
+static_assert(sizeof(WIFI_SSID) > 1 && sizeof(WIFI_PASS) > 1 && sizeof(WEB_PASS) > 1 && sizeof(TIMEZONE) > 1,
               "run `source wifi.env` before building; see platformio.ini");
 
 static const char *const HOSTNAME = "spa";
-static const char *const TIMEZONE = "EST5EDT,M3.2.0,M11.1.0";  // New York
 static const char *const SCHEDULE_FILE = "/schedule.txt";
 
 static const unsigned DATA_PIN = 3;  // CLOCK and HOLD follow on GP4 and GP5
