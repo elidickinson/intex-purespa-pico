@@ -159,6 +159,8 @@ static std::vector<spa::Entry> schedule;
 static WebServer server(80);
 
 static uint32_t frames = 0;
+static std::string last_result;  // outcome of the last finished request, for the page
+static uint32_t results = 0;      // requests finished
 static uint32_t stalls = 0;  // times the PIO FIFO filled and frames were missed
 static uint32_t last_displays = 0;
 static uint32_t last_display_ms = 0;
@@ -245,8 +247,11 @@ static void log_changes(uint32_t now) {
     log(error.empty() ? "error cleared" : "error " + error);
   }
   std::string result;
-  while (controller.take_result(result))
+  while (controller.take_result(result)) {
     log(result);
+    last_result = result;
+    results++;
+  }
 }
 
 // Makes the reply program follow controller.held()
@@ -321,6 +326,8 @@ static std::string status_json() {
   s += ",\"hours_left\":" + json_int(decoder.hours_left());
   s += ",\"error\":\"" + decoder.error() + "\"";
   s += ",\"job\":\"" + (job ? spa::describe(*job) : "") + "\"";
+  s += ",\"result\":\"" + last_result + "\"";
+  s += ",\"results\":" + std::to_string(results);
   s += ",\"waiting\":" + std::to_string(controller.waiting());
   s += ",\"frames\":" + std::to_string(frames);
   s += ",\"dropped\":" + std::to_string(dropped + stalls);
