@@ -21,8 +21,10 @@ namespace led {
 constexpr uint16_t FRAME = 0x4000;
 constexpr uint16_t POWER = 0x0001;
 constexpr uint16_t SALT = 0x0010;
-constexpr uint16_t HEATING = 0x0080;      // unverified on this tub (SB-H20 value)
-constexpr uint16_t HEATER_IDLE = 0x0200;  // heater on, water at temperature; unverified (SB-H20 value)
+constexpr uint16_t HEATING = 0x0080;
+// Blinks while salt runs with the heater on (heater suspended). Steady, probably heater on with
+// the water at temperature (SB-H20 value); not yet seen.
+constexpr uint16_t HEATER_IDLE = 0x0200;
 constexpr uint16_t BUBBLES = 0x0400;
 constexpr uint16_t FILTER = 0x1000;
 }  // namespace led
@@ -63,6 +65,9 @@ std::optional<int> hours_of(const std::string &text);
  * A shorter value next to a blank is a menu value, known when it ends; one that isn't is skipped.
  * The value right after a menu closes follows a blank but lasts, so it is not mistaken for a menu
  * value.
+ *
+ * A light that toggles twice within BLINK_DISPLAYS is blinking; leds() counts it as on until it
+ * has stopped toggling for that long.
  */
 class Decoder {
  public:
@@ -70,6 +75,7 @@ class Decoder {
 
   uint16_t leds() const { return leds_; }  // LED frame without the beep bit, 0 until seen
   bool on(uint16_t led_bit) const { return leds_ & led_bit; }
+  uint16_t blinking() const { return blinking_; }
   bool beeping() const { return beeping_; }
   uint32_t beeps() const { return beeps_; }        // beeps started so far
   uint32_t displays() const { return displays_; }  // complete displays decoded, ~84/s
@@ -90,6 +96,7 @@ class Decoder {
   static constexpr uint32_t STEADY = 60;          // ~0.7 s; flashing values last up to ~33
   static constexpr uint32_t MIN_STEADY = 30;      // water temperature flickers for as few as 5
   static constexpr uint32_t MENU_DISPLAYS = 100;  // ~1.2 s; blanks come every ~41 while flashing
+  static constexpr uint32_t BLINK_DISPLAYS = 120;  // ~1.4 s; blinking lights toggle every ~42
 
   void on_display();
   void new_run(const std::string &text);
@@ -99,6 +106,11 @@ class Decoder {
   std::array<char, 4> digits_{};
   int next_pos_ = 0;
   uint16_t leds_ = 0;
+  uint16_t raw_leds_ = 0;
+  uint16_t blinking_ = 0;
+  // Per light, the display count after its last two toggles; 0 if it hasn't toggled
+  std::array<uint32_t, 16> toggled_{};
+  std::array<uint32_t, 16> toggled_before_{};
   bool beeping_ = false;
   uint32_t beeps_ = 0;
   uint32_t last_beep_ = 0;
@@ -141,7 +153,8 @@ std::string describe(const Request &r);
  * pressed twice without that check, since the second press would undo the first. Never presses anything except
  * for a request. Never blocks: call update() regularly with the time in ms.
  *
- * salt=N while salt runs sets a new N-hour run starting now, as the manual describes.
+ * salt=N while salt runs sets a new N-hour run starting now, as the manual describes. Heater
+ * requests that would press Heater fail while salt runs: per the manual, the press stops the salt.
  */
 class Controller {
  public:

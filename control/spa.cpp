@@ -91,7 +91,19 @@ void Decoder::feed(uint16_t raw) {
     return;  // button poll
 
   if (frame & led::FRAME) {
-    leds_ = frame;
+    // The first frame is a starting point, not a toggle
+    uint16_t changed = raw_leds_ ? frame ^ raw_leds_ : 0;
+    raw_leds_ = frame;
+    blinking_ = 0;
+    for (int bit = 0; bit < 16; bit++) {
+      if (changed >> bit & 1) {
+        toggled_before_[bit] = toggled_[bit];
+        toggled_[bit] = displays_ + 1;
+      }
+      if (toggled_before_[bit] && displays_ + 1 - toggled_before_[bit] < BLINK_DISPLAYS)
+        blinking_ |= 1 << bit;
+    }
+    leds_ = frame | blinking_;
     bool beeping = !(raw & NO_BEEP);
     if (beeping && !beeping_)
       beeps_++;
@@ -348,6 +360,8 @@ void Controller::toggle(Button button, uint16_t led_bits, uint32_t now) {
     case Step::START:
       if (on == want)
         finish(want ? "already on" : "already off");
+      else if (button == Button::HEATER && d_.on(led::SALT))
+        finish("failed: salt is running, and pressing Heater would stop it");
       else
         press(button, now);
       break;

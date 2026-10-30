@@ -196,7 +196,7 @@ static void queue(const spa::Request &r, const char *source) {
     log(std::string(source) + ": " + spa::describe(r) + " dropped, too many requests waiting");
 }
 
-static std::string lights(uint16_t leds) {
+static std::string lights(uint16_t leds, uint16_t blinking) {
   static const struct {
     uint16_t bit;
     const char *name;
@@ -207,7 +207,7 @@ static std::string lights(uint16_t leds) {
   std::string out = std::string("lights ") + hex + ":";
   for (const auto &n : NAMES) {
     if (leds & n.bit)
-      out += std::string(" ") + n.name;
+      out += std::string(" ") + n.name + (blinking & n.bit ? " (blinking)" : "");
   }
   return out;
 }
@@ -215,6 +215,7 @@ static std::string lights(uint16_t leds) {
 // Logs changes, so the log can be compared with what the panel showed
 static void log_changes(uint32_t now) {
   static uint16_t leds = 0;
+  static uint16_t blinking = 0;
   static std::string error;
   static uint32_t beeps = 0;
   static std::string display;
@@ -235,9 +236,10 @@ static void log_changes(uint32_t now) {
     target = decoder.target();
     log("target " + std::to_string(*target) + decoder.unit());
   }
-  if (decoder.leds() != leds) {
+  if (decoder.leds() != leds || decoder.blinking() != blinking) {
     leds = decoder.leds();
-    log(lights(leds));
+    blinking = decoder.blinking();
+    log(lights(leds, blinking));
   }
   if (decoder.error() != error) {
     error = decoder.error();
@@ -313,6 +315,7 @@ static std::string status_json() {
   s += std::string(",\"power\":") + json_bool(decoder.on(spa::led::POWER));
   s += std::string(",\"heater\":") + json_bool(decoder.on(spa::led::HEATING | spa::led::HEATER_IDLE));
   s += std::string(",\"heating\":") + json_bool(decoder.on(spa::led::HEATING));
+  s += std::string(",\"heater_suspended\":") + json_bool(decoder.blinking() & spa::led::HEATER_IDLE);
   s += std::string(",\"bubbles\":") + json_bool(decoder.on(spa::led::BUBBLES));
   s += std::string(",\"filter\":") + json_bool(decoder.on(spa::led::FILTER));
   s += std::string(",\"salt\":") + json_bool(decoder.on(spa::led::SALT));

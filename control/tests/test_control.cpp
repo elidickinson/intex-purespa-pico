@@ -110,9 +110,11 @@ struct FakeSpa {
     return s;
   }
 
+  // While salt runs, the heater is suspended and its light blinks
   uint16_t leds() const {
-    return led::FRAME | (power ? led::POWER : 0) | (heater ? led::HEATING | led::FILTER : 0) |
-           (bubbles ? led::BUBBLES : 0) | (salt_on ? led::SALT | led::FILTER : 0x0008);
+    uint16_t heat = !heater ? 0 : !salt_on ? led::HEATING | led::FILTER : cycle / 42 % 2 ? led::HEATER_IDLE : 0;
+    return led::FRAME | (power ? led::POWER : 0) | heat | (bubbles ? led::BUBBLES : 0) |
+           (salt_on ? led::SALT | led::FILTER : 0x0008);
   }
 
   void press(Button b) {
@@ -125,8 +127,9 @@ struct FakeSpa {
     } else if (!power) {
       return;
     } else if (b == Button::HEATER) {
-      heater = !heater;
-      salt_on = salt_on && !heater;
+      // Per the manual, pressing Heater while salt runs stops the salt
+      heater = salt_on || !heater;
+      salt_on = false;
     } else if (b == Button::BUBBLES) {
       bubbles = !bubbles;
     } else if (b == Button::UP || b == Button::DOWN) {
@@ -147,7 +150,6 @@ struct FakeSpa {
       if (menu == SALT) {
         salt_on = salt_setting > 0;
         salt_left = salt_setting;
-        heater = heater && !salt_on;
       }
       menu = NONE;
     }
@@ -376,6 +378,40 @@ static void test_waits_for_a_menu_opened_on_the_panel() {
 }
 
 // Pressing Salt inside an open salt menu would step it to the next duration
+static void test_heater_requests_during_salt_dont_stop_it() {
+  Rig rig = powered_on();
+  rig.spa.heater = true;
+  rig.spa.salt_on = true;
+  rig.spa.salt_left = 3;
+  rig.run_ms(3000);
+  bool steady = true;
+  for (int i = 0; i < 100; i++) {  // more than a whole blink
+    rig.run_ms(12);
+    steady = steady && rig.d.on(led::HEATER_IDLE) && rig.d.blinking() == led::HEATER_IDLE;
+  }
+  CHECK(steady);
+  CHECK_EQ(rig.request("heater", "on"), "heater=on: already on");
+  CHECK_EQ(rig.request("heater", "off"), "heater=off: failed: salt is running, and pressing Heater would stop it");
+  CHECK(rig.spa.presses.empty());
+  CHECK(rig.spa.salt_on);
+  // When salt ends, the heater resumes and the light stops blinking
+  rig.spa.salt_on = false;
+  rig.run_ms(2000);
+  CHECK_EQ(long(rig.d.blinking()), 0L);
+  CHECK(rig.d.on(led::HEATING));
+  CHECK(!rig.d.on(led::HEATER_IDLE));
+}
+
+// One change of a light is not blinking
+static void test_single_light_change_is_not_blinking() {
+  Rig rig = powered_on();
+  CHECK_EQ(rig.request("bubbles", "on"), "bubbles=on: done");
+  CHECK_EQ(long(rig.d.blinking()), 0L);
+  CHECK_EQ(rig.request("bubbles", "off"), "bubbles=off: done");
+  CHECK_EQ(long(rig.d.blinking()), 0L);
+  CHECK(!rig.d.on(led::BUBBLES));
+}
+
 static void test_test_press_waits_for_a_menu_on_the_panel() {
   Rig rig = powered_on();
   rig.spa.press(Button::SALT);  // someone opens the salt menu, showing 3H
@@ -492,6 +528,8 @@ int main() {
   test_dropped_frames_fail_the_request_and_wait_for_fresh_data();
   test_no_bus_data_fails_without_pressing();
   test_waits_for_a_menu_opened_on_the_panel();
+  test_heater_requests_during_salt_dont_stop_it();
+  test_single_light_change_is_not_blinking();
   test_test_press_waits_for_a_menu_on_the_panel();
   test_salt_while_running_sets_a_new_duration();
   test_quickly_changed_value_is_not_water();

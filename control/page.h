@@ -55,7 +55,7 @@ async function refresh() {
     ['Water', deg(s.water)],
     ['Target', s.target == null ? 'not shown yet' : deg(s.target)],
     ['Power', on(s.power)],
-    ['Heater', s.heater ? (s.heating ? 'heating' : 'on, at temperature') : 'off'],
+    ['Heater', !s.heater ? 'off' : s.heater_suspended ? 'on, suspended while salt runs' : s.heating ? 'heating' : 'on, at temperature'],
     ['Bubbles', on(s.bubbles)],
     ['Filter', on(s.filter) + (s.filter && !s.salt ? left : '')],
     ['Salt', on(s.salt) + (s.salt ? left : '')],
