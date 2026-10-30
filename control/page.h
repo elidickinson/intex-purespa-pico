@@ -64,7 +64,8 @@ let pass = localStorage.getItem('pass');
 async function api(url, opts = {}) {
   const r = await fetch(url, {...opts, headers: {Authorization: 'Basic ' + btoa('spa:' + pass)}});
   if (r.status == 401) {
-    loginmsg.textContent = pass ? 'Wrong password.' : '';
+    if (pass)
+      loginmsg.textContent = 'Wrong password.';
     localStorage.removeItem('pass');
     pass = null;
     main.hidden = true;
@@ -74,6 +75,7 @@ async function api(url, opts = {}) {
   return r;
 }
 function signin() {
+  loginmsg.textContent = '';
   pass = pw.value;
   localStorage.setItem('pass', pass);
   start();
