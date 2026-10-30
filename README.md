@@ -1,94 +1,77 @@
 # PicoW-Intex-PureSpa
-Intex PureSpa SB-H20 control interface for esphome.
 
-Idea came from https://github.com/YorffoeG/diyscip and https://github.com/jnsbyr/esp8266-intexsbh20 for their great comprehension of PureSpa protocol.
-Since many reports problems with controlling target temperature due to heavy processing in interrupts, I decide to give raspberry pi pico W a try.
+WiFi control for an Intex PureSpa with the **SB-HS10-1** control panel, on a Raspberry Pi Pico W. It sits inline between the pump base and the original panel, which keeps working.
 
-# Aspirin tube case !!
-![image](https://github.com/RealByron/PicoW-Intex-PureSpa/assets/1749192/8ec6f361-ab9b-407b-b083-84245200abdd)
+Tested on one 28431EH with the 28530 salt cell. Other models may differ: the listen-only firmware in `capture/` logs the bus over WiFi so you can check yours (see the top of `capture/capture.cpp`).
 
-# Fully discoverable in Home assistant
-![image](https://github.com/RealByron/PicoW-Intex-PureSpa/assets/1749192/d7c6fecb-88e9-4a62-b593-ee8090b1208b)
+- Web page and HTTP API: water and target temperature, lights, salt hours left, error codes.
+- Settings: power, heater and bubbles on/off, target temperature, salt for 3, 5 or 8 hours. Each checks the panel first and only presses when something needs to change, so repeating one is harmless.
+- Weekly schedule stored on the Pico, e.g. `fri 15:00 power=on heater=on temp=102`.
+- Updates over WiFi.
 
-# Electronics
-Don't blame me, it's not my professional activity !!!
-Advices are welcome.
+## Hardware
 
-Hardware is very simple :
-- Raspberry Pi Pico W
-- Level shifters 
-- 10 µF capcitor
+A Pico W, a 4-channel BSS138 level shifter (Adafruit 757), a 10 µF capacitor, and an inline plug and socket for the panel cable.
 
-![image](https://github.com/RealByron/PicoW-Intex-PureSpa/assets/1749192/ca510e43-296f-4e0a-9e2c-d352a6a11b31)
+| Spa wire | Level shifter | Pico W |
+| --- | --- | --- |
+| 1: +5 V | HV | VSYS (pin 39) |
+| 2: GND | GND | GND (pin 3) |
+| 3: DATA | B1 ↔ A1 | GP3 (pin 5) |
+| 4: CLOCK | B2 ↔ A2 | GP4 (pin 6) |
+| 5: HOLD | B3 ↔ A3 | GP5 (pin 7) |
+| | LV | 3V3 OUT (pin 36) |
 
-![image](https://github.com/RealByron/PicoW-Intex-PureSpa/assets/1749192/89278776-472c-42b0-af2c-f625bd6158a3)
+Wire numbers follow [jnsbyr's schematic](https://github.com/jnsbyr/esp8266-intexsbh20/blob/master/assets/Schematic.png). Put the capacitor across pins 39 and 38. Before connecting the Pico, check that wire 1 reads a steady 5 V against wire 2.
 
-If you know how to connect level shifters, you just need to connect :
-- DATA (3.3V) on GP3
-- CLK (3.3V) on GP4
-- HOLD (3.3V) on GP5
+**Never connect USB while the Pico is on the spa:** it joins the computer's ground and 5 V to the spa's.
 
-![image](https://github.com/RealByron/PicoW-Intex-PureSpa/assets/1749192/9e6325ca-7f74-44bb-b7ff-f31e9fb3cbef)
-![image](https://github.com/RealByron/PicoW-Intex-PureSpa/assets/1749192/086b608e-5e62-42fe-aa9c-cd78b8a11c70)
+## Install
 
-Credits : https://github.com/YorffoeG/diyscip/blob/master/docs/connector%20pinout.png
+Needs [uv](https://docs.astral.sh/uv/) (PlatformIO runs through `uvx`) and a C++ compiler for the tests.
 
-# PIO program
-![image](https://github.com/RealByron/PicoW-Intex-PureSpa/assets/1749192/0cf17844-4127-45b0-a2fc-9e69e141ccc2)
+1. Create `control/wifi.env` (gitignored). `WEB_PASS` protects the page and updates. The Pico W only joins 2.4 GHz networks.
+   ```sh
+   export WIFI_SSID=...
+   export WIFI_PASS=...
+   export WEB_PASS=...
+   ```
+2. Set `TIMEZONE` in `control/control.cpp` (a POSIX TZ string; the default is New York).
+3. First flash, with the Pico off the spa: hold BOOTSEL while plugging in USB, then run `control/flash-usb.sh`.
+4. After that, update over WiFi with `control/update.sh`.
 
-Mostly GPIO just read data bit on clock rising edge.
-When ISR is full of 16 bits, then store that value on Y register.
-ISR is also pushed to FIFO and an IRQ is fired.
-Then C program have time to proces all these words in FIFO and decodes leds and digits.
+## Use
 
-For push button, a function put expected push button code in FIFO and the PIO program loads it in X register.
+Open `http://spa.local/` (user `spa`, password `WEB_PASS`), or use the same settings from any computer, for example from cron:
 
-When X and Y are equal, a pulse is done on DATA line (4µs after CS rising edge and during 2 µs)
-
-# Firmware structure
-
-The protocol logic is hardware-independent and covered by host tests:
-
-- `components/purespa/protocol.{h,cpp}` - frame decoding and button/setpoint decisions, no Pico SDK or ESPHome code, all timing is passed in as a parameter
-- `components/purespa/pio_bus.{h,cpp}` - the PIO program and an IRQ handler that only copies frames into a ring buffer; decoding and logging happen in the main loop
-- `components/purespa/purespa*.{h,cpp}` - ESPHome entities on top of the two layers above
-- `tests/` - host tests with a fake spa model, run with `make -C tests`
-
-Run the tests (clang++ or g++, no dependencies):
-
-```
-make -C tests
+```sh
+curl -u spa:PASSWORD http://spa.local/status
+curl -u spa:PASSWORD -X POST 'http://spa.local/set?heater=on&temp=102'
 ```
 
-# Installation 
-I'm using WSL Ubuntu on windows 11.
-Go to your favourite dev directory then `git clone` this repository
+`power`, `heater`, `bubbles` = `on`/`off`; `temp` = degrees as the panel shows them; `salt` = `off`, `3`, `5` or `8`. The API is listed at the top of `control/control.cpp`, the schedule format in `control/schedule.h`.
 
-```
-git clone https://github.com/RealByron/PicoW-Intex-PureSpa.git PicowSpa
-cd PicowSpa
-```
-enable virtual env and activate it
-```
-python -m venv spa-env
-source spa-env/bin/activate
-```
-install esphome
-```
-pip install wheel
-pip install esphome
-```
-and execute it
-```
-esphome dashboard .
-```
-Then you're at (esp)home
+## How it works
 
-# Contributing
-Contributions to this project are welcome. If you find any issues or have suggestions for improvements, please open an issue or submit a pull request.
+The pump base polls the panel over a three-wire bus at about 330 kHz, and the panel answers a poll by pulling DATA low. Two PIO programs handle the timing: one reads every frame, the other answers polls the way the panel does and stops by itself when the spa beeps. Codes and timings are in [docs/protocol.md](docs/protocol.md).
 
-# License
-This project is licensed under the MIT License.
+## Compared with RealByron's original
 
-# Disclaimer
-Using this project to control your Intex PureSpa may void your warranty. Please consult the documentation and terms of service provided by Intex before using this project.
+This is a fork of [RealByron/PicoW-Intex-PureSpa](https://github.com/RealByron/PicoW-Intex-PureSpa), which showed that a Pico W with PIO can handle the bus, as an ESPHome component for the SB-H20. This version is a rewrite:
+
+- Plain Arduino firmware with its own web page and schedule, instead of ESPHome and Home Assistant.
+- Supports the SB-HS10-1, including salt. Its bus runs about 3 times faster than the SB-H20's.
+- Button replies copy the real panel's timing and stop at the spa's beep, so a press can't repeat.
+- Never presses anything at startup. On/off state comes from the panel's lights, not from what was requested.
+- Tests against a real capture and in a PIO emulator.
+
+## Other projects
+
+For PureSpa models without built-in WiFi:
+
+- [jnsbyr/esp8266-intexsbh20](https://github.com/jnsbyr/esp8266-intexsbh20): ESP8266 and MQTT, for the SB-H20, SB-B20, SSP-H-20-1 and SJB-HS (including salt).
+- [YorffoeG/diyscip](https://github.com/YorffoeG/diyscip): ESP8266 on a custom PCB with MQTT, for SSP and SJB models.
+
+## Disclaimer
+
+Not affiliated with Intex, and tested on one tub. It may void your warranty; use at your own risk.

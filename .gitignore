@@ -1,15 +1,5 @@
-# Gitignore settings for ESPHome
-# This is an example and may include too much for your use-case.
-# You can modify this file to suit your needs.
-/.esphome/
-/secrets.yaml
-**/__pycache__/
 .pio/
-capture/wifi.env
-control/wifi.env
-/.vscode/
-/spa-env/
-
-# host tests
-tests/test_protocol
+**/wifi.env
 control/tests/test_control
+.DS_Store
+*.log
