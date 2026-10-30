@@ -75,3 +75,7 @@ For PureSpa models without built-in WiFi:
 ## Disclaimer
 
 Not affiliated with Intex, and tested on one tub. It may void your warranty; use at your own risk.
+
+## License
+
+MIT, see [LICENSE](LICENSE).
