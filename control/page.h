@@ -83,7 +83,6 @@ function signin() {
 }
 function start() {
   login.hidden = true;
-  main.hidden = false;
   api('/schedule').then(r => r.text()).then(t => sched.value = t);
   refresh();
 }
@@ -124,6 +123,7 @@ async function refresh() {
   else if (s.results != shown && s.result)
     msg.textContent = s.result;
   shown = s.results;
+  main.hidden = false;  // shown once filled in, so it never appears half-empty
   if (more.open) {
     disp.textContent = 'Display "' + s.display + '"';
     lg.textContent = await (await api('/log')).text();
