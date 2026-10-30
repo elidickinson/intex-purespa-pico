@@ -81,6 +81,7 @@ struct FakeSpa {
   bool responsive = true;
   int beep_delay = 0;  // cycles between a press registering and its beep
   bool beep_unheard = false;  // the press registers, but its beep never reaches the decoder
+  bool heat_paused = false;   // heater on but its lights out, as for a moment when salt ends
   int beep_in = -1;
   bool power = false, heater = false, bubbles = false, salt_on = false;
   int water = 94, target = 100, salt_setting = 3, salt_left = 0;
@@ -112,7 +113,9 @@ struct FakeSpa {
 
   // While salt runs, the heater is suspended and its light blinks
   uint16_t leds() const {
-    uint16_t heat = !heater ? 0 : !salt_on ? led::HEATING | led::FILTER : cycle / 42 % 2 ? led::HEATER_IDLE : 0;
+    uint16_t heat = !heater    ? 0
+                    : salt_on  ? (cycle / 42 % 2 ? led::HEATER_IDLE : 0)
+                    : led::FILTER | (heat_paused ? 0 : led::HEATING);
     return led::FRAME | (power ? led::POWER : 0) | heat | (bubbles ? led::BUBBLES : 0) |
            (salt_on ? led::SALT | led::FILTER : 0x0008);
   }
@@ -428,6 +431,27 @@ static void test_light_switched_on_and_off_quickly_is_off() {
   CHECK_EQ(rig.spa.presses.size(), size_t(2));  // only the two made at the panel
 }
 
+// When salt ends, the heater lights go out for a moment before heating resumes
+static void test_heater_on_as_salt_ends_is_not_pressed() {
+  Rig rig = powered_on();
+  rig.spa.heater = true;
+  rig.spa.salt_on = true;
+  rig.spa.salt_left = 3;
+  rig.run_ms(3000);
+  rig.spa.salt_on = false;
+  rig.spa.heat_paused = true;
+  Request r;
+  CHECK_EQ(parse_request("heater", "on", r), "");
+  CHECK(rig.c.queue(r));
+  rig.run_ms(2000);  // longer than the blink rule lasts
+  rig.spa.heat_paused = false;
+  std::string result;
+  for (int i = 0; i < 2000 && !rig.c.take_result(result); i++)
+    rig.run_ms(12);
+  CHECK_EQ(result, "heater=on: already on");
+  CHECK(rig.spa.presses.empty());
+}
+
 static void test_test_press_waits_for_a_menu_on_the_panel() {
   Rig rig = powered_on();
   rig.spa.press(Button::SALT);  // someone opens the salt menu, showing 3H
@@ -547,6 +571,7 @@ int main() {
   test_heater_requests_during_salt_dont_stop_it();
   test_single_light_change_is_not_blinking();
   test_light_switched_on_and_off_quickly_is_off();
+  test_heater_on_as_salt_ends_is_not_pressed();
   test_test_press_waits_for_a_menu_on_the_panel();
   test_salt_while_running_sets_a_new_duration();
   test_quickly_changed_value_is_not_water();

@@ -67,8 +67,10 @@ std::optional<int> hours_of(const std::string &text);
  * value.
  *
  * A light that toggles twice within BLINK_DISPLAYS is blinking. leds() counts the heater idle
- * light as on while it blinks, since the heater stays on while salt runs. Any other blinking light
- * may just have been switched on and off at the panel, so the panel isn't settled until it stops.
+ * light as on while it blinks, since the heater stays on while salt runs. The panel isn't settled
+ * until no light has changed for LIGHTS_DISPLAYS, that blinking aside: a light switched on and off
+ * quickly at the panel looks like blinking, and when salt ends the heater lights go out for a
+ * moment before heating resumes.
  */
 class Decoder {
  public:
@@ -88,10 +90,10 @@ class Decoder {
   const std::string &error() const { return error_; }  // e.g. "E91", empty if none
   bool menu_open() const { return seen_blank_ && displays_ - last_blank_ < MENU_DISPLAYS; }
   // No menu open, no beep for MENU_DISPLAYS (a press just made on the panel shows no blank yet),
-  // and no light blinking but the heater's while salt runs
+  // and no light change for LIGHTS_DISPLAYS
   bool settled() const {
     return !menu_open() && !beeping_ && displays_ - last_beep_ >= MENU_DISPLAYS &&
-           !(blinking_ & ~(on(led::SALT) ? led::HEATER_IDLE : 0));
+           displays_ - lights_changed_ >= LIGHTS_DISPLAYS;
   }
   uint32_t menu_seq() const { return menu_seq_; }  // counts flashing values shown
   const std::string &menu_text() const { return menu_text_; }
@@ -102,6 +104,7 @@ class Decoder {
   static constexpr uint32_t MIN_STEADY = 30;      // water temperature flickers for as few as 5
   static constexpr uint32_t MENU_DISPLAYS = 100;  // ~1.2 s; blanks come every ~41 while flashing
   static constexpr uint32_t BLINK_DISPLAYS = 120;  // ~1.4 s; blinking lights toggle every ~42
+  static constexpr uint32_t LIGHTS_DISPLAYS = 250;  // ~3 s; heating resumed within 1 s of salt ending
 
   void on_display();
   void new_run(const std::string &text);
@@ -113,6 +116,7 @@ class Decoder {
   uint16_t leds_ = 0;
   uint16_t raw_leds_ = 0;
   uint16_t blinking_ = 0;
+  uint32_t lights_changed_ = 0;  // display count at the last light change
   // Per light, the display count after its last two toggles; 0 if it hasn't toggled
   std::array<uint32_t, 16> toggled_{};
   std::array<uint32_t, 16> toggled_before_{};

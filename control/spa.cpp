@@ -94,6 +94,8 @@ void Decoder::feed(uint16_t raw) {
     // The first frame is a starting point, not a toggle
     uint16_t changed = raw_leds_ ? frame ^ raw_leds_ : 0;
     raw_leds_ = frame;
+    if (changed & ~(frame & led::SALT ? led::HEATER_IDLE : 0))
+      lights_changed_ = displays_;
     blinking_ = 0;
     for (int bit = 0; bit < 16; bit++) {
       if (changed >> bit & 1) {
