@@ -1,10 +1,12 @@
 #!/bin/bash
-# Tests, builds and sends the firmware to the Pico over WiFi, then checks that it restarted.
+# Builds, tests and sends the firmware to the Pico over WiFi, then checks that it restarted.
 # Usage: control/update.sh
 set -euo pipefail
 cd "$(dirname "$0")"
 source wifi.env
 
+# Built first: the build regenerates bus.pio.h, which the tests use
+uvx platformio run -e ota
 make -C tests
 if ! uvx platformio run -e ota -t upload; then
   echo "Update failed. The Pico keeps running its old firmware; it is safe to try again."

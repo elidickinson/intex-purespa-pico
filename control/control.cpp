@@ -4,7 +4,7 @@
 //
 // Presses: the reply program in bus.pio, on pio1, is the only code that can drive DATA, and only
 // low. It answers the poll for controller.held() and stops by itself at the spa's beep; the PIO
-// IRQ stops it after MAX_REPLIES answers. Neither depends on the main loop, which a web request
+// IRQ stops it at the beep too, and after MAX_REPLIES answers. Neither depends on the main loop, which a web request
 // or an update can stall for seconds.
 //
 // Pins (hottub build-plan.md): GP3 = DATA, GP4 = CLOCK, GP5 = HOLD. The spa's panel 5 V feeds
@@ -50,7 +50,7 @@ static uint sm;
 
 // ~0.6 s of frames, so they survive a slow loop (a web request or a flash write)
 static constexpr uint32_t RING_SIZE = 2048;
-static uint16_t ring[RING_SIZE];
+static volatile uint16_t ring[RING_SIZE];
 static volatile uint32_t head = 0;
 static volatile uint32_t tail = 0;
 static volatile uint32_t dropped = 0;
@@ -75,13 +75,11 @@ static void __not_in_flash_func(irq_handler)() {
   pio_interrupt_clear(pio, 0);
   while (!pio_sm_is_rx_fifo_empty(pio, sm)) {
     uint16_t frame = ~pio_sm_get(pio, sm) & 0xFFFF;
-    if (answering) {
-      if (!(frame & spa::NO_BEEP)) {
-        answering = 0;  // the spa beeps, so the reply program has stopped by itself
-      } else if (frame == answering && ++replies >= MAX_REPLIES) {
-        answering = 0;
-        set_reply_x(NEVER);
-      }
+    // At the beep the reply program stops by itself; stopping it here too means the two can't
+    // disagree about it
+    if (answering && (!(frame & spa::NO_BEEP) || (frame == answering && ++replies >= MAX_REPLIES))) {
+      answering = 0;
+      set_reply_x(NEVER);
     }
     uint32_t h = head;
     uint32_t next = (h + 1) % RING_SIZE;

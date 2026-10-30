@@ -86,7 +86,7 @@ Seen values:
 Known bits: `0x0001` power, `0x0080` heating, `0x0400` bubbles, `0x1000` filter, `0x0100` no beep.
 
 - **`0x0010`:** on while salt runs; probably the salt LED. The SJB-HS value `0x2000` never appears.
-- **`0x0200`:** blinks (about 0.5 s on, 0.5 s off) while salt runs with the heater on: the heater is suspended, as the manual describes, and resumes heating by itself when salt stops. Steady, it is probably heater on with the water at temperature (the SB-H20 value); not yet seen.
+- **`0x0200`:** blinks (about 0.5 s on, 0.5 s off) while salt runs with the heater on: the heater is suspended, as the manual describes, and resumes heating by itself when salt stops. Steady, it means heater on with the water at temperature (the SB-H20 value), seen after lowering the target below the water temperature and when heating stops at the target.
 - **`0x0008`:** set in every frame except while salt runs and in the lamp test; not a light, meaning unknown.
 - **Heater:** turning it on also turns on the filter. Turning it off leaves the filter running (per the manual, for 1 minute).
 

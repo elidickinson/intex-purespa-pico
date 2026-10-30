@@ -412,6 +412,22 @@ static void test_single_light_change_is_not_blinking() {
   CHECK(!rig.d.on(led::BUBBLES));
 }
 
+// Two quick toggles at the panel look like blinking, but leave the light off. Without beeps, so
+// waiting for the beeps to end can't hide the blink.
+static void test_light_switched_on_and_off_quickly_is_off() {
+  Rig rig = powered_on();
+  rig.spa.beep_unheard = true;
+  rig.spa.press(Button::BUBBLES);
+  rig.run_ms(300);
+  rig.spa.press(Button::BUBBLES);
+  rig.run_ms(100);
+  rig.spa.beep_unheard = false;
+  CHECK(!rig.d.on(led::BUBBLES));
+  CHECK(!rig.d.settled());
+  CHECK_EQ(rig.request("bubbles", "off"), "bubbles=off: already off");
+  CHECK_EQ(rig.spa.presses.size(), size_t(2));  // only the two made at the panel
+}
+
 static void test_test_press_waits_for_a_menu_on_the_panel() {
   Rig rig = powered_on();
   rig.spa.press(Button::SALT);  // someone opens the salt menu, showing 3H
@@ -530,6 +546,7 @@ int main() {
   test_waits_for_a_menu_opened_on_the_panel();
   test_heater_requests_during_salt_dont_stop_it();
   test_single_light_change_is_not_blinking();
+  test_light_switched_on_and_off_quickly_is_off();
   test_test_press_waits_for_a_menu_on_the_panel();
   test_salt_while_running_sets_a_new_duration();
   test_quickly_changed_value_is_not_water();

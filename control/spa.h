@@ -22,8 +22,8 @@ constexpr uint16_t FRAME = 0x4000;
 constexpr uint16_t POWER = 0x0001;
 constexpr uint16_t SALT = 0x0010;
 constexpr uint16_t HEATING = 0x0080;
-// Blinks while salt runs with the heater on (heater suspended). Steady, probably heater on with
-// the water at temperature (SB-H20 value); not yet seen.
+// Blinks while salt runs with the heater on (heater suspended). Steady: heater on with the water
+// at temperature.
 constexpr uint16_t HEATER_IDLE = 0x0200;
 constexpr uint16_t BUBBLES = 0x0400;
 constexpr uint16_t FILTER = 0x1000;
@@ -66,8 +66,9 @@ std::optional<int> hours_of(const std::string &text);
  * The value right after a menu closes follows a blank but lasts, so it is not mistaken for a menu
  * value.
  *
- * A light that toggles twice within BLINK_DISPLAYS is blinking; leds() counts it as on until it
- * has stopped toggling for that long.
+ * A light that toggles twice within BLINK_DISPLAYS is blinking. leds() counts the heater idle
+ * light as on while it blinks, since the heater stays on while salt runs. Any other blinking light
+ * may just have been switched on and off at the panel, so the panel isn't settled until it stops.
  */
 class Decoder {
  public:
@@ -86,8 +87,12 @@ class Decoder {
   std::optional<int> hours_left() const { return hours_left_; }
   const std::string &error() const { return error_; }  // e.g. "E91", empty if none
   bool menu_open() const { return seen_blank_ && displays_ - last_blank_ < MENU_DISPLAYS; }
-  // No menu open and no beep for MENU_DISPLAYS: a press just made on the panel shows no blank yet
-  bool settled() const { return !menu_open() && !beeping_ && displays_ - last_beep_ >= MENU_DISPLAYS; }
+  // No menu open, no beep for MENU_DISPLAYS (a press just made on the panel shows no blank yet),
+  // and no light blinking but the heater's while salt runs
+  bool settled() const {
+    return !menu_open() && !beeping_ && displays_ - last_beep_ >= MENU_DISPLAYS &&
+           !(blinking_ & ~(on(led::SALT) ? led::HEATER_IDLE : 0));
+  }
   uint32_t menu_seq() const { return menu_seq_; }  // counts flashing values shown
   const std::string &menu_text() const { return menu_text_; }
 

@@ -45,7 +45,7 @@ pre{white-space:pre-wrap;font-size:.8em}
 <p>Last command: <span id=msg>none</span></p>
 <details><summary>Schedule</summary>
 <textarea id=sched rows=8></textarea>
-<p><button onclick=save()>Save</button> <span id=smsg></span></p>
+<p><button id=savebtn onclick=save() disabled>Save</button> <span id=smsg></span></p>
 <p><small>One entry per line: days, time (24-hour), then settings. Days are daily, weekdays, weekends,
 or a list such as mon,wed,fri. # starts a comment.<br>
 <code>fri 15:00 power=on heater=on temp=102</code><br><code>daily 02:00 salt=3</code></small></p>
@@ -83,7 +83,11 @@ function signin() {
 }
 function start() {
   login.hidden = true;
-  api('/schedule').then(r => r.text()).then(t => sched.value = t);
+  // Save stays off until the schedule has loaded, so it can't save an empty one by accident
+  api('/schedule').then(r => r.text()).then(t => {
+    sched.value = t;
+    savebtn.disabled = false;
+  });
   refresh();
 }
 async function send(q) {

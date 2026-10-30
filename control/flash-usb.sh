@@ -1,5 +1,5 @@
 #!/bin/bash
-# Tests, builds and flashes the firmware over USB, for the first time or when WiFi updates don't
+# Builds, tests and flashes the firmware over USB, for the first time or when WiFi updates don't
 # work. Only with the Pico off the spa: USB would join the computer's ground and 5 V to the spa's.
 # Hold BOOTSEL while plugging in the USB cable, then run: control/flash-usb.sh
 set -euo pipefail
@@ -12,8 +12,9 @@ if [ "$answer" != y ]; then
   echo "Stopped. Unplug the spa and take the Pico off it first."
   exit 1
 fi
-make -C tests
+# Built first: the build regenerates bus.pio.h, which the tests use
 uvx platformio run
+make -C tests
 if ! "$PICOTOOL" info -d > /dev/null 2>&1; then
   echo "No Pico in BOOTSEL mode. Unplug the USB cable, hold BOOTSEL while plugging it back in, then run this again."
   exit 1

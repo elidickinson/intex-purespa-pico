@@ -103,7 +103,7 @@ void Decoder::feed(uint16_t raw) {
       if (toggled_before_[bit] && displays_ + 1 - toggled_before_[bit] < BLINK_DISPLAYS)
         blinking_ |= 1 << bit;
     }
-    leds_ = frame | blinking_;
+    leds_ = frame | (blinking_ & led::HEATER_IDLE);
     bool beeping = !(raw & NO_BEEP);
     if (beeping && !beeping_)
       beeps_++;
@@ -317,10 +317,10 @@ void Controller::update(uint32_t now) {
 void Controller::run(uint32_t now) {
   const Request &r = *job_;
   if (step_ == Step::START) {
-    // A menu someone opened on the panel may still change the state; let it close first
+    // A menu someone opened on the panel may still change the state; let it settle first
     if (!d_.settled() || d_.displays() < fresh_after_) {
       if (now - step_at_ >= MENU_CLOSE_MS)
-        finish("failed: a menu on the panel kept flashing");
+        finish("failed: a menu or light on the panel kept flashing");
       return;
     }
     if (r.kind != Request::POWER && r.kind != Request::PRESS && !d_.on(led::POWER)) {
