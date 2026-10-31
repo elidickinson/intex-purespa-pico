@@ -47,6 +47,8 @@ curl -u spa:PASSWORD -X POST 'http://spa.local/set?heater=on&temp=102'
 
 `power`, `heater`, `bubbles` = `on`/`off`; `temp` = degrees as the panel shows them; `salt` = `off`, `3`, `5` or `8`. The API is listed at the top of `control/control.cpp`, the schedule format in `control/schedule.h`.
 
+The Pico keeps no history. To record one, run `control/record-status.sh` from cron once a minute on a computer that's always on; it adds the status, with the date and time, as a JSON line to a file (see the top of the script).
+
 ## How it works
 
 The pump base polls the panel over a three-wire bus at about 330 kHz, and the panel answers a poll by pulling DATA low. Two PIO programs handle the timing: one reads every frame, the other answers polls the way the panel does and stops by itself when the spa beeps. Codes and timings are in [docs/protocol.md](docs/protocol.md).
