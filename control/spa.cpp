@@ -112,8 +112,6 @@ void Decoder::feed(uint16_t raw) {
     if (beeping)
       last_beep_ = displays_;
     beeping_ = beeping;
-    if (!(frame & (led::SALT | led::FILTER)))
-      hours_left_.reset();
     return;
   }
   int pos = 0;
@@ -188,6 +186,7 @@ void Decoder::classify(const std::string &text, bool steady) {
     error_.clear();
   } else if (auto hours = hours_of(text); hours && *hours) {
     hours_left_ = hours;
+    hours_shown_ = displays_;
   }
 }
 

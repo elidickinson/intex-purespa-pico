@@ -86,7 +86,12 @@ class Decoder {
   std::optional<int> water() const { return water_; }
   std::optional<int> target() const { return target_; }  // known once the panel has shown it
   char unit() const { return unit_; }                     // 'F' or 'C', 0 until known
-  std::optional<int> hours_left() const { return hours_left_; }
+  // Known while the panel keeps showing it; the heater keeps the filter on after salt ends
+  std::optional<int> hours_left() const {
+    if (displays_ - hours_shown_ >= HOURS_DISPLAYS)
+      return std::nullopt;
+    return hours_left_;
+  }
   const std::string &error() const { return error_; }  // e.g. "E91", empty if none
   bool menu_open() const { return seen_blank_ && displays_ - last_blank_ < MENU_DISPLAYS; }
   // No menu open, no beep for MENU_DISPLAYS (a press just made on the panel shows no blank yet),
@@ -105,6 +110,7 @@ class Decoder {
   static constexpr uint32_t MENU_DISPLAYS = 100;  // ~1.2 s; blanks come every ~41 while flashing
   static constexpr uint32_t BLINK_DISPLAYS = 120;  // ~1.4 s; blinking lights toggle every ~42
   static constexpr uint32_t LIGHTS_DISPLAYS = 250;  // ~3 s; heating resumed within 1 s of salt ending
+  static constexpr uint32_t HOURS_DISPLAYS = 840;  // ~10 s; while salt runs the hours show every ~4 s
 
   void on_display();
   void new_run(const std::string &text);
@@ -138,6 +144,7 @@ class Decoder {
   std::optional<int> target_;
   char unit_ = 0;
   std::optional<int> hours_left_;
+  uint32_t hours_shown_ = 0;  // display count when hours_left_ was last shown
   std::string error_;
   uint32_t menu_seq_ = 0;
   std::string menu_text_;

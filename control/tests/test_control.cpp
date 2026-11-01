@@ -278,6 +278,18 @@ static void test_salt_off_while_running() {
   CHECK_EQ(long(rig.spa.presses.size()), 4L);  // open showing 3H, 5H, 8H, OFF
 }
 
+static void test_hours_left_go_when_salt_ends_with_the_filter_on() {
+  Rig rig = powered_on();
+  rig.spa.heater = rig.spa.salt_on = true;
+  rig.spa.salt_left = 1;
+  rig.run_ms(5000);
+  CHECK_EQ(rig.d.hours_left(), 1);
+  rig.spa.salt_on = false;
+  rig.run_ms(15000);
+  CHECK(rig.d.on(led::FILTER));
+  CHECK_EQ(rig.d.hours_left(), std::nullopt);
+}
+
 static void test_temperature_is_read_back_and_set() {
   Rig rig = powered_on();
   CHECK_EQ(rig.d.target(), std::nullopt);
@@ -569,6 +581,7 @@ int main() {
   test_bubbles_refused_while_spa_is_off();
   test_salt_on_steps_from_current_setting();
   test_salt_off_while_running();
+  test_hours_left_go_when_salt_ends_with_the_filter_on();
   test_temperature_is_read_back_and_set();
   test_temperature_limits();
   test_unanswered_press_is_retried_then_given_up();
