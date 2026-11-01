@@ -66,6 +66,12 @@ std::optional<int> hours_of(const std::string &text);
  * The value right after a menu closes follows a blank but lasts, so it is not mistaken for a menu
  * value.
  *
+ * hours_left() is the last steady hours value, until none has been seen for HOURS_DISPLAYS: the
+ * lights can't tell when a run ends, since the heater keeps the filter on after salt ends. Each
+ * hours display counts once, when it is classified, as the panel alternates it with the water
+ * temperature; so a value shown without a break would expire too, as do the hours while a long
+ * menu is open.
+ *
  * A light that toggles twice within BLINK_DISPLAYS is blinking. leds() counts the heater idle
  * light as on while it blinks, since the heater stays on while salt runs. The panel isn't settled
  * until no light has changed for LIGHTS_DISPLAYS, that blinking aside: a light switched on and off
@@ -86,7 +92,6 @@ class Decoder {
   std::optional<int> water() const { return water_; }
   std::optional<int> target() const { return target_; }  // known once the panel has shown it
   char unit() const { return unit_; }                     // 'F' or 'C', 0 until known
-  // Known while the panel keeps showing it; the heater keeps the filter on after salt ends
   std::optional<int> hours_left() const {
     if (displays_ - hours_shown_ >= HOURS_DISPLAYS)
       return std::nullopt;
