@@ -285,7 +285,7 @@ static void test_hours_left_go_when_salt_ends_with_the_filter_on() {
   rig.run_ms(5000);
   CHECK_EQ(rig.d.hours_left(), 1);
   rig.spa.salt_on = false;
-  rig.run_ms(15000);
+  rig.run_ms(25000);
   CHECK(rig.d.on(led::FILTER));
   CHECK_EQ(rig.d.hours_left(), std::nullopt);
 }

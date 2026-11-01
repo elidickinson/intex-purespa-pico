@@ -115,7 +115,8 @@ class Decoder {
   static constexpr uint32_t MENU_DISPLAYS = 100;  // ~1.2 s; blanks come every ~41 while flashing
   static constexpr uint32_t BLINK_DISPLAYS = 120;  // ~1.4 s; blinking lights toggle every ~42
   static constexpr uint32_t LIGHTS_DISPLAYS = 250;  // ~3 s; heating resumed within 1 s of salt ending
-  static constexpr uint32_t HOURS_DISPLAYS = 840;  // ~10 s; while salt runs the hours show every ~4 s
+  // ~18 s; while salt runs the hours show every ~4 s, and the salt menu flashes ~10 s after a press
+  static constexpr uint32_t HOURS_DISPLAYS = 1500;
 
   void on_display();
   void new_run(const std::string &text);
