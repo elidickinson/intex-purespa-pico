@@ -530,21 +530,31 @@ static void test_requests_run_in_order() {
 static void test_schedule() {
   std::vector<Entry> entries;
   CHECK_EQ(parse_schedule("# comment\n\nfri 15:00 power=on heater=on  # warm up\nDaily 02:00 salt=3\n"
-                          "sat,sun 09:30 temp=102\n",
+                          "sat,sun 09:30 temp=102\n2026-11-06 15:00 heater=on\n",
                           entries),
            "");
-  CHECK_EQ(long(entries.size()), 3L);
+  CHECK_EQ(long(entries.size()), 4L);
   CHECK_EQ(long(entries[0].requests.size()), 2L);
-  CHECK(due(entries[0], 5, 15, 0));
-  CHECK(!due(entries[0], 4, 15, 0));
-  CHECK(!due(entries[0], 5, 15, 1));
-  CHECK(due(entries[1], 3, 2, 0));
-  CHECK(due(entries[2], 0, 9, 30) && due(entries[2], 6, 9, 30) && !due(entries[2], 1, 9, 30));
+  CHECK(due(entries[0], 20261106, 5, 15, 0));
+  CHECK(!due(entries[0], 20261105, 4, 15, 0));
+  CHECK(!due(entries[0], 20261106, 5, 15, 1));
+  CHECK(due(entries[1], 20261104, 3, 2, 0));
+  CHECK(due(entries[2], 20261108, 0, 9, 30) && due(entries[2], 20261107, 6, 9, 30) &&
+        !due(entries[2], 20261109, 1, 9, 30));
   CHECK_EQ(describe(entries[1].requests[0]), "salt=3");
 
+  // A dated entry runs on that day only, not on the same weekday a week later
+  CHECK(due(entries[3], 20261106, 5, 15, 0));
+  CHECK(!due(entries[3], 20261113, 5, 15, 0));
+  CHECK(!due(entries[3], 20261106, 5, 15, 1));
+
   CHECK_EQ(parse_schedule("daily 02:00 salt=3\nfry 15:00 heater=on\n", entries),
-           "line 2: unknown day 'fry', use daily, weekdays, weekends or e.g. mon,wed,fri");
-  CHECK_EQ(long(entries.size()), 3L);  // unchanged on error
+           "line 2: unknown day 'fry', use daily, weekdays, weekends, e.g. mon,wed,fri or a date like 2026-11-06");
+  CHECK_EQ(long(entries.size()), 4L);  // unchanged on error
+  CHECK_EQ(parse_schedule("2028-02-29 15:00 heater=on", entries), "");
+  for (const char *date : {"2026-02-29", "2026-11-31", "2026-13-01", "2026-11-00", "2026-11-6", "2026-11-06x"})
+    CHECK_EQ(parse_schedule(std::string(date) + " 15:00 heater=on", entries),
+             "line 1: '" + std::string(date) + "' is not a date, use YYYY-MM-DD, e.g. 2026-11-06");
   CHECK_EQ(parse_schedule("daily 25:00 heater=on", entries), "line 1: time must be HH:MM, 24-hour, e.g. 07:30 or 19:00");
   CHECK_EQ(parse_schedule("daily 7:00 heater=on", entries), "line 1: time must be HH:MM, 24-hour, e.g. 07:30 or 19:00");
   CHECK_EQ(parse_schedule("daily 07:00", entries), "line 1: expected at least one setting, e.g. heater=on");

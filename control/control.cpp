@@ -281,8 +281,9 @@ static void run_schedule() {
   if (minute <= last_minute)
     return;
   last_minute = minute;
+  uint32_t date = (t.tm_year + 1900) * 10000 + (t.tm_mon + 1) * 100 + t.tm_mday;
   for (const auto &entry : schedule) {
-    if (due(entry, t.tm_wday, t.tm_hour, t.tm_min)) {
+    if (due(entry, date, t.tm_wday, t.tm_hour, t.tm_min)) {
       for (const auto &r : entry.requests)
         queue(r, "schedule");
     }

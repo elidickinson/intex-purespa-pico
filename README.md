@@ -6,7 +6,7 @@ Adds WiFi control to an Intex PureSpa hot tub with the **SB-HS10-1** control pan
 
 - See the water and target temperature, which panel lights are on, salt hours left and error codes.
 - Turn power, heater and bubbles on or off, set the target temperature, and run the salt generator.
-- Keep a weekly schedule, e.g. `fri 15:00 power=on heater=on temp=102`. The Pico runs it, so no other computer is needed.
+- Keep a weekly schedule, e.g. `fri 15:00 power=on heater=on temp=102`, plus one-off entries such as `2026-11-06 15:00 heater=on`. The Pico runs it, so no other computer is needed.
 - Use the same settings from scripts over HTTP.
 - Update the firmware over WiFi.
 

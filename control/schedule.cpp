@@ -31,9 +31,23 @@ static std::string parse_days(std::string word, uint8_t &days) {
     while (i < 7 && day != DAYS[i])
       i++;
     if (i == 7)
-      return "unknown day '" + day + "', use daily, weekdays, weekends or e.g. mon,wed,fri";
+      return "unknown day '" + day + "', use daily, weekdays, weekends, e.g. mon,wed,fri or a date like 2026-11-06";
     days |= 1 << i;
   }
+  return "";
+}
+
+static std::string parse_date(const std::string &word, uint32_t &date) {
+  static const unsigned MONTH_DAYS[12] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
+  std::string error = "'" + word + "' is not a date, use YYYY-MM-DD, e.g. 2026-11-06";
+  unsigned y, m, d;
+  char extra;
+  if (std::sscanf(word.c_str(), "%4u-%2u-%2u%c", &y, &m, &d, &extra) != 3 || word.size() != 10 || m < 1 || m > 12)
+    return error;
+  bool leap = y % 4 == 0 && (y % 100 != 0 || y % 400 == 0);
+  if (d < 1 || d > MONTH_DAYS[m - 1] + (m == 2 && leap))
+    return error;
+  date = y * 10000 + m * 100 + d;
   return "";
 }
 
@@ -53,7 +67,9 @@ static std::string parse_line(const std::string &line, Entry &entry) {
   words >> days >> time;
   if (time.empty())
     return "expected days, a time and at least one setting";
-  if (auto error = parse_days(days, entry.days); !error.empty())
+  if (auto error = std::isdigit(static_cast<unsigned char>(days[0])) ? parse_date(days, entry.date)
+                                                                     : parse_days(days, entry.days);
+      !error.empty())
     return error;
   if (auto error = parse_time(time, entry.hour, entry.minute); !error.empty())
     return error;

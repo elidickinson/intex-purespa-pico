@@ -47,8 +47,9 @@ pre{white-space:pre-wrap;font-size:.8em}
 <textarea id=sched rows=8></textarea>
 <p><button id=savebtn onclick=save() disabled>Save</button> <span id=smsg></span></p>
 <p><small>One entry per line: days, time (24-hour), then settings. Days are daily, weekdays, weekends,
-or a list such as mon,wed,fri. # starts a comment.<br>
-<code>fri 15:00 power=on heater=on temp=102</code><br><code>daily 02:00 salt=3</code></small></p>
+a list such as mon,wed,fri, or a date for one time only. # starts a comment.<br>
+<code>fri 15:00 power=on heater=on temp=102</code><br><code>daily 02:00 salt=3</code><br>
+<code>2026-11-06 15:00 heater=on</code></small></p>
 </details>
 <details id=more><summary>Details</summary>
 <p id=disp class=dim></p>
