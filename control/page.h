@@ -44,7 +44,7 @@ pre{white-space:pre-wrap;font-size:.8em}
 </table>
 <p>Last command: <span id=msg>none</span></p>
 <details><summary>Schedule</summary>
-<textarea id=sched rows=8></textarea>
+<textarea id=sched rows=8 autocapitalize=off autocorrect=off spellcheck=false></textarea>
 <p><button id=savebtn onclick=save() disabled>Save</button> <span id=smsg></span></p>
 <p><small>One entry per line: days, time (24-hour), then settings. Days are daily, weekdays, weekends,
 a list such as mon,wed,fri, or a date for one time only. # starts a comment.<br>
@@ -97,6 +97,9 @@ async function send(q) {
 }
 function toggle(k) { send(k + '=' + (s[k] ? 'off' : 'on')); }
 async function save() {
+  // Phones and Macs turn typed hyphens into en or em dashes, and pasted text can bring
+  // non-breaking spaces; the parser only accepts plain ASCII hyphens and spaces
+  sched.value = sched.value.replace(/[\u2012-\u2015\u2212]/g, '-').replace(/\u00a0/g, ' ');
   smsg.textContent = (await (await api('/schedule', {method: 'POST', body: sched.value})).text()).trim();
 }
 async function refresh() {
