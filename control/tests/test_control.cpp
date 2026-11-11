@@ -523,6 +523,29 @@ static void test_temperature_menu_is_read() {
   CHECK(!d.menu_open());
 }
 
+// As seen on the tub: the water flickered from 101 to 100 just as the menu closed
+static void test_water_flicker_after_menu_is_not_target() {
+  Decoder d;
+  auto display = [&](const char *text, int n) {
+    for (int i = 0; i < n; i++) {
+      for (int pos = 0; pos < 4; pos++) {
+        d.feed(NO_BEEP);
+        d.feed(digit_frame(pos, text[pos]) | NO_BEEP);
+      }
+    }
+  };
+  display("101F", 100);
+  for (int i = 0; i < 3; i++) {
+    display("095F", 17);
+    display("   F", 25);
+  }
+  display("101F", 16);
+  display("100F", 40);
+  display("101F", 200);
+  CHECK_EQ(d.target(), 95);
+  CHECK_EQ(d.water(), 101);
+}
+
 static void test_requests_run_in_order() {
   Rig rig;
   rig.run_ms(2000);
@@ -599,6 +622,7 @@ int main() {
   test_salt_while_running_sets_a_new_duration();
   test_quickly_changed_value_is_not_water();
   test_temperature_menu_is_read();
+  test_water_flicker_after_menu_is_not_target();
   test_requests_run_in_order();
   test_schedule();
   if (failures) {

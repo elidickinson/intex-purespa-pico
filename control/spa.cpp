@@ -151,16 +151,15 @@ void Decoder::on_display() {
 
 void Decoder::new_run(const std::string &text) {
   bool blank = is_blank(text);
-  // Runs that reached STEADY are classified already. A short value between two other values is
-  // skipped: the water temperature flickering by a degree, or a menu value changing before its
-  // first blank.
+  // Runs that reached STEADY are classified already. A short value that ends at a blank is a menu
+  // value. Any other short value is skipped: the water temperature flickering by a degree, even
+  // right after a menu closes, or a menu value changing before its first blank.
   if (!run_classified_) {
-    if (run_after_blank_ || blank)
+    if (blank)
       classify(stable_, false);
     else if (displays_ - run_start_ >= MIN_STEADY)
       classify(stable_, true);
   }
-  run_after_blank_ = is_blank(stable_);
   stable_ = text;
   run_start_ = displays_;
   run_classified_ = blank;

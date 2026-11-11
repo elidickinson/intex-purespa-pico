@@ -61,10 +61,9 @@ std::optional<int> hours_of(const std::string &text);
  * The panel flashes a value (alternating it with a blank display) while a menu is open: the
  * target temperature after Up/Down, or the salt hours after Salt. Any other value is shown
  * steadily: the water temperature, alternating with the hours left while salt or filter runs.
- * A value is steady if it lasts STEADY displays, or lasts MIN_STEADY and is not next to a blank.
- * A shorter value next to a blank is a menu value, known when it ends; one that isn't is skipped.
- * The value right after a menu closes follows a blank but lasts, so it is not mistaken for a menu
- * value.
+ * A value is steady if it lasts STEADY displays, or lasts MIN_STEADY and doesn't end at a blank.
+ * A shorter value that ends at a blank is a menu value, known when it ends; one that doesn't is
+ * skipped, such as the water temperature flickering right after a menu closes.
  *
  * hours_left() is the last steady hours value, until none has been seen for HOURS_DISPLAYS: the
  * lights can't tell when a run ends, since the heater keeps the filter on after salt ends. Each
@@ -142,7 +141,6 @@ class Decoder {
   std::string stable_;
   uint32_t run_start_ = 0;
   bool run_classified_ = true;
-  bool run_after_blank_ = false;
   bool seen_blank_ = false;
   uint32_t last_blank_ = 0;
 
