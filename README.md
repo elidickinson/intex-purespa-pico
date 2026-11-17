@@ -12,7 +12,7 @@ Adds WiFi control to an Intex PureSpa hot tub with the **SB-HS10-1** control pan
 
 <img src="docs/screenshot.png" alt="The spa's web page" width="400">
 
-Tested on one 28431EH with the 28530 salt cell. Other models may differ: the listen-only firmware in `capture/` logs the bus over WiFi so you can check yours (see the top of `capture/capture.cpp`).
+Tested on the Intex **PureSpa Plus 6-Person Bubble Jet (model 28431EH) with the optional 28530 salt cell**. Other models may differ: the listen-only firmware in `capture/` logs the bus over WiFi so you can check yours (see the top of `capture/capture.cpp`).
 
 The code was written with help from AI coding tools. I can't be arsed to remember how C++ works. It was tested on the tub above and I feel pretty good about it, but use at your own risk.
 
@@ -26,32 +26,36 @@ A Pico W, a level shifter (Adafruit 757) and a 10 µF capacitor go in a small wa
 
 Needs [uv](https://docs.astral.sh/uv/) (PlatformIO runs through `uvx`) and a C++ compiler for the tests.
 
-1. Create `control/wifi.env` (gitignored). The Pico W only joins 2.4 GHz networks. `WEB_PASS` protects the page and updates. `TIMEZONE` is a POSIX TZ string; this one is New York.
+1. Create `control/wifi.env` (gitignored):
    ```sh
-   export WIFI_SSID=...
+   export WIFI_SSID=...   # 2.4 GHz networks only
    export WIFI_PASS=...
-   export WEB_PASS=...
-   export TIMEZONE=EST5EDT,M3.2.0,M11.1.0
+   export WEB_PASS=...    # protects the page and updates
+   export TIMEZONE=EST5EDT,M3.2.0,M11.1.0   # POSIX TZ string, e.g. New York
    ```
 2. First flash, with the Pico off the spa: hold BOOTSEL while plugging in USB, then run `control/flash-usb.sh`.
 3. After that, update over WiFi with `control/update.sh`.
 
 ## Use
 
-Open `http://spa.local/` and enter `WEB_PASS`; the browser remembers it. Or use the same settings from any computer with basic auth (user `spa`), for example from cron:
+Open `http://spa.local/` and enter `WEB_PASS`. The browser remembers it. Scripts can use the same settings with basic auth (user `spa`), for example from cron:
 
 ```sh
 curl -u spa:PASSWORD http://spa.local/status
 curl -u spa:PASSWORD -X POST 'http://spa.local/set?heater=on&temp=102'
 ```
 
-`power`, `heater`, `bubbles` = `on`/`off`; `temp` = degrees as the panel shows them; `salt` = `off`, `3`, `5` or `8`. The API is listed at the top of `control/control.cpp`, the schedule format in `control/schedule.h`.
+- `power`, `heater`, `bubbles`: `on` or `off`
+- `temp`: degrees as the panel shows them
+- `salt`: `off`, `3`, `5` or `8`
 
-The Pico keeps no history. To record one, run `control/record-status.sh` from cron once a minute on a computer that's always on; it adds the status, with the date and time, as a JSON line to a file (see the top of the script).
+Full API: top of `control/control.cpp`. Schedule format: `control/schedule.h`.
+
+The Pico keeps no history. To record one, run `control/record-status.sh` from cron once a minute on a computer that's always on. It adds the status, with the date and time, as a JSON line to a file (see the top of the script).
 
 ## How it works
 
-The pump base polls the panel over a three-wire bus at about 330 kHz, and the panel answers a poll by pulling DATA low. Two PIO programs handle the timing: one reads every frame, the other answers polls the way the panel does and stops by itself when the spa beeps. Codes and timings are in [docs/protocol.md](docs/protocol.md).
+The pump base polls the panel over a three-wire bus at about 330 kHz. The panel answers a poll by pulling DATA low. Two PIO programs handle the timing: one reads every frame, the other answers polls the way the panel does and stops by itself when the spa beeps. Codes and timings are in [docs/protocol.md](docs/protocol.md).
 
 ## Compared with RealByron's original
 
@@ -72,7 +76,7 @@ For PureSpa models without built-in WiFi:
 
 ## Disclaimer
 
-Not affiliated with Intex, and tested on one tub. It may void your warranty; use at your own risk.
+Not affiliated with Intex. May void your warranty. Use at own risk.
 
 ## License
 
